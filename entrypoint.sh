@@ -7,6 +7,7 @@ touch /workspace/src/unitree_ros2/dependencies/cyclonedds/COLCON_IGNORE
 touch /workspace/src/unitree_ros2/dependencies/unitree_sdk2/COLCON_IGNORE
 touch /workspace/src/unitree_ros2/dependencies/unitree_sdk2_python/COLCON_IGNORE
 
+rosdep install --from-path src --ignore-src -r -y
 colcon build --symlink-install --parallel-workers $(( $(nproc) / 2 ))
 source /workspace/install/setup.bash
 

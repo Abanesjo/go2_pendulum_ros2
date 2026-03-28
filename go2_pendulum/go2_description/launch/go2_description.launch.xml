@@ -1,0 +1,34 @@
+<launch>
+  <arg name="use_sim_time" default="false"/>
+  <arg name="use_gui_limits" default="false"/>
+  <arg name="jointstate_gui" default="false"/>
+  <arg name="urdf_file_default" default="$(find-pkg-share go2_description)/urdf/go2_description.urdf"/>
+  <arg name="urdf_file_gui" default="$(find-pkg-share go2_description)/urdf/go2_description_gui.urdf"/>
+  <arg name="urdf_file" default="$(if $(var use_gui_limits) $(var urdf_file_gui) $(var urdf_file_default))"/>
+
+  <node pkg="robot_state_publisher" exec="robot_state_publisher" name="robot_state_publisher" output="screen">
+    <param name="robot_description" value="$(command 'cat $(var urdf_file)')"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+
+  <group if="$(var jointstate_gui)">
+    <node pkg="joint_state_publisher_gui" exec="joint_state_publisher_gui" name="joint_state_publisher_gui" output="screen">
+      <remap from="/joint_states" to="/joint_command"/>
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+      <param name="zeros.FL_hip_joint" value="0.1"/>
+      <param name="zeros.RL_hip_joint" value="0.1"/>
+      <param name="zeros.FR_hip_joint" value="-0.1"/>
+      <param name="zeros.RR_hip_joint" value="-0.1"/>
+
+      <param name="zeros.FL_thigh_joint" value="0.8"/>
+      <param name="zeros.FR_thigh_joint" value="0.8"/>
+      <param name="zeros.RL_thigh_joint" value="1.0"/>
+      <param name="zeros.RR_thigh_joint" value="1.0"/>
+
+      <param name="zeros.FL_calf_joint" value="-1.5"/>
+      <param name="zeros.FR_calf_joint" value="-1.5"/>
+      <param name="zeros.RL_calf_joint" value="-1.5"/>
+      <param name="zeros.RR_calf_joint" value="-1.5"/>
+    </node>
+  </group>
+</launch>

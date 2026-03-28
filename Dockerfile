@@ -7,6 +7,8 @@ RUN apt install -y \
     ros-humble-rmw-cyclonedds-cpp \
     ros-humble-rosidl-generator-dds-idl \
     ros-humble-rosbag2-cpp \
+    ros-humble-joint-state-publisher-gui \ 
+    python3-torch \ 
     libyaml-cpp-dev \
     libeigen3-dev \
     python3-pip \
