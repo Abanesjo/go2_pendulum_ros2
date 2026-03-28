@@ -1,0 +1,9 @@
+[submodule "dependencies/unitree_sdk2"]
+	path = dependencies/unitree_sdk2
+	url = https://github.com/unitreerobotics/unitree_sdk2.git
+[submodule "dependencies/unitree_sdk2_python"]
+	path = dependencies/unitree_sdk2_python
+	url = https://github.com/unitreerobotics/unitree_sdk2_python.git
+[submodule "dependencies/cyclonedds"]
+	path = dependencies/cyclonedds
+	url = https://github.com/eclipse-cyclonedds/cyclonedds
