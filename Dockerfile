@@ -8,7 +8,6 @@ RUN apt install -y \
     ros-humble-rosidl-generator-dds-idl \
     ros-humble-rosbag2-cpp \
     ros-humble-joint-state-publisher-gui \ 
-    python3-torch \ 
     libyaml-cpp-dev \
     libeigen3-dev \
     python3-pip \
@@ -34,6 +33,9 @@ RUN cd /tmp/unitree_sdk2 && mkdir build && cd build && \
 COPY dependencies/unitree_sdk2_python /tmp/unitree_sdk2_python
 RUN CYCLONEDDS_HOME=/opt/cyclonedds pip3 install /tmp/unitree_sdk2_python && \
     rm -rf /tmp/unitree_sdk2_python
+
+RUN pip3 install torch --index-url https://download.pytorch.org/whl/cu130
+RUN pip3 install numpy==1.26.4
 
 ENV CYCLONEDDS_HOME=/opt/cyclonedds
 ENV CMAKE_PREFIX_PATH=/opt/unitree_robotics:/opt/cyclonedds
