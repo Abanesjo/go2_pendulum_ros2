@@ -20,14 +20,9 @@ from isaaclab.terrains import TerrainImporterCfg
 
 
 ROOT_DIR = Path(__file__).resolve().parent
-REPO_DIR = ROOT_DIR.parent
 
-USD_PATH = ROOT_DIR / "model" / "go2_pendulum.usd"
-POLICY_PATH = (
-    REPO_DIR / "models" / "policy.pt"
-    if (REPO_DIR / "models" / "policy.pt").is_file()
-    else REPO_DIR / "go2_bringup" / "model" / "policy.pt"
-)
+USD_PATH = ROOT_DIR / "usd" / "go2_pendulum.usd"
+POLICY_PATH = ROOT_DIR / "model" / "policy.pt"
 
 SIM_DT = 1.0 / 200.0
 DECIMATION = 4

@@ -22,7 +22,7 @@ from isaacsim.core.utils.extensions import enable_extension
 
 
 ROOT_DIR = Path(__file__).resolve().parent
-USD_PATH = ROOT_DIR / "model" / "go2_pendulum.usd"
+USD_PATH = ROOT_DIR / "usd" / "go2_pendulum.usd"
 
 SIM_DT = 1.0 / 200.0
 SIM_DEVICE = "cpu"
