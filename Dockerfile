@@ -26,6 +26,7 @@ RUN cd /workspace/dependencies/unitree_sdk2 && mkdir build && cd build && \
 
 # Pin numpy/scipy/opencv before installing unitree_sdk2_python (which pulls numpy2 + opencv4 otherwise)
 RUN pip3 install numpy==1.26.4 scipy==1.13.1 opencv-contrib-python==4.7.0.72
+RUN pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu130
 
 # Install unitree_sdk2_python
 RUN CYCLONEDDS_HOME=/usr/local pip3 install --no-deps /workspace/dependencies/unitree_sdk2_python
