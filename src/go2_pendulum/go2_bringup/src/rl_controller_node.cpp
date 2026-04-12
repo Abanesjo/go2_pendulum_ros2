@@ -131,6 +131,7 @@ public:
         this->declare_parameter<double>("lpf_cutoff_hz", 8.0);
         this->declare_parameter<double>("soft_limit_factor", 0.9);
         this->declare_parameter<double>("action_bound_margin", 1.0);
+        this->declare_parameter<bool>("zero_pendulum", false);
         this->declare_parameter<std::vector<double>>("default_joint_pos",
             std::vector<double>{
                 0.1, -0.1, 0.1, -0.1,      // FL/FR/RL/RR hip
@@ -150,6 +151,7 @@ public:
             this->get_parameter("soft_limit_factor").as_double());
         action_bound_margin_ = static_cast<float>(
             this->get_parameter("action_bound_margin").as_double());
+        zero_pendulum_ = this->get_parameter("zero_pendulum").as_bool();
         auto default_pos_d =
             this->get_parameter("default_joint_pos").as_double_array();
         for (int i = 0; i < NUM_LEG; ++i)
@@ -468,12 +470,12 @@ private:
                 obs.push_back(motor_dq_[i]);
 
             // [36:38] pendulum_pos
-            obs.push_back(pendulum_pos_[0]);
-            obs.push_back(pendulum_pos_[1]);
+            obs.push_back(zero_pendulum_ ? 0.0f : pendulum_pos_[0]);
+            obs.push_back(zero_pendulum_ ? 0.0f : pendulum_pos_[1]);
 
             // [38:40] pendulum_vel
-            obs.push_back(pendulum_vel_[0]);
-            obs.push_back(pendulum_vel_[1]);
+            obs.push_back(zero_pendulum_ ? 0.0f : pendulum_vel_[0]);
+            obs.push_back(zero_pendulum_ ? 0.0f : pendulum_vel_[1]);
 
             // [40:52] prev_action
             for (int i = 0; i < ACTION_DIM; ++i)
@@ -620,6 +622,9 @@ private:
     // Pendulum (read from /joint_states, estimated by go2_bridge)
     float pendulum_pos_[2] = {};
     float pendulum_vel_[2] = {};
+
+    // Pendulum override
+    bool zero_pendulum_ = false;
 
     // Goal
     float target_x_ = 0.0f, target_y_ = 0.0f, target_yaw_ = 0.0f;
