@@ -1,0 +1,26 @@
+rl_controller_node:
+  ros__parameters:
+    model_path: ""  # overridden by launch file
+    control_dt: 0.02            # 50 Hz policy inference
+    publish_rate: 500.0         # 500 Hz joint_commands publish rate
+    standup_duration: 10.0      # seconds to interpolate to default pose
+    action_scale: 0.25
+    lpf_cutoff_hz: 8.0
+    soft_limit_factor: 0.9
+    action_bound_margin: 1.0
+    # Policy order: FL_hip, FR_hip, RL_hip, RR_hip,
+    #               FL_thigh, FR_thigh, RL_thigh, RR_thigh,
+    #               FL_calf, FR_calf, RL_calf, RR_calf
+    default_joint_pos:
+      - 0.1     # FL_hip
+      - -0.1    # FR_hip
+      - 0.1     # RL_hip
+      - -0.1    # RR_hip
+      - 0.8     # FL_thigh
+      - 0.8     # FR_thigh
+      - 1.0     # RL_thigh
+      - 1.0     # RR_thigh
+      - -1.5    # FL_calf
+      - -1.5    # FR_calf
+      - -1.5    # RL_calf
+      - -1.5    # RR_calf

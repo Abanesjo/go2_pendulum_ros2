@@ -1,28 +1,29 @@
 <?xml version="1.0"?>
 <launch>
-    <arg name="model_file" default="$(find-pkg-share go2_bringup)/model/policy.pt"/>
-    <arg name="use_sim_time" default="false"/>
+    <arg name="bridge" default="true"/>
+    <arg name="model_file" default="$(find-pkg-share go2_bringup)/model/policy.onnx"/>
 
-    <include file="$(find-pkg-share go2_description)/launch/go2_description.launch.xml">
-        <arg name="use_sim_time" value="$(var use_sim_time)"/>
-    </include>
+    <!-- Robot description -->
+    <include file="$(find-pkg-share go2_description)/launch/go2_description.launch.xml"/>
 
-    <node pkg="go2_bringup" name="odom_tf_publisher" exec="odom_to_tf.py">
-        <param name="odom_topic" value="/odom"/>
-        <param name="qos_depth" value="1"/>
-        <param name="use_sim_time" value="$(var use_sim_time)"/>
+    <!-- go2_bridge: Unitree lowstate/lowcmd bridge (for Unitree MuJoCo sim) -->
+    <group if="$(var bridge)">
+        <node pkg="go2_bridge" exec="go2_bridge_node" name="go2_bridge_node" output="screen">
+            <param from="$(find-pkg-share go2_bridge)/config/gains.yaml"/>
+        </node>
+    </group>
+
+    <!-- RL controller (C++ node with ONNX inference) -->
+    <node pkg="go2_bringup" exec="rl_controller_node" name="rl_controller_node" output="screen">
+        <param from="$(find-pkg-share go2_bringup)/config/config.yaml"/>
+        <param name="model_path" value="$(var model_file)"/>
     </node>
 
-    <node pkg="go2_bringup" name="rl_controller" exec="rl_controller.py">
-        <param name="model_file" value="$(var model_file)"/>
-        <param name="joint_states_topic" value="/joint_states"/>
-        <param name="odom_topic" value="/odom"/>
-        <param name="joint_command_topic" value="/joint_command"/>
-        <param name="goal_topic" value="/goal"/>
-        <param name="goal_frame" value="odom"/>
-        <param name="leg_joint_names" value="['FL_hip_joint','FR_hip_joint','RL_hip_joint','RR_hip_joint','FL_thigh_joint','FR_thigh_joint','RL_thigh_joint','RR_thigh_joint','FL_calf_joint','FR_calf_joint','RL_calf_joint','RR_calf_joint']"/>
-        <param name="pendulum_joint1_name" value="pendulum_joint1"/>
-        <param name="pendulum_joint2_name" value="pendulum_joint2"/>
-        <param name="use_sim_time" value="$(var use_sim_time)"/>
+    <!-- Waypoint navigation -->
+    <node pkg="go2_navigation" exec="waypoint_manager_node" name="waypoint_manager_node" output="screen">
+        <param from="$(find-pkg-share go2_navigation)/config/nav.yaml"/>
     </node>
+
+    <!-- rviz -->
+    <node pkg="rviz2" exec="rviz2" name="rviz" args="-d $(find-pkg-share go2_bringup)/rviz/config.rviz"/>
 </launch>

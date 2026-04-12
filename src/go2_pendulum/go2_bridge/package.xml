@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>go2_bridge</name>
+  <version>0.0.1</version>
+  <description>Bridge between Unitree Go2 lowstate/lowcmd and standard ROS2 joint_states/joint_commands</description>
+  <maintainer email="john.abanes@nyu.edu">john</maintainer>
+  <license>BSD-3-Clause</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>unitree_go</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

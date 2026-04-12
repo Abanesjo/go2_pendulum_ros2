@@ -3,20 +3,20 @@
 <package format="3">
   <name>go2_bringup</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>Go2 pendulum bringup: RL controller and launch configuration</description>
   <maintainer email="john.abanes@nyu.edu">john</maintainer>
-  <license>TODO: License declaration</license>
+  <license>BSD-3-Clause</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
-  <exec_depend>geometry_msgs</exec_depend>
-  <exec_depend>go2_interfaces</exec_depend>
-  <exec_depend>message_filters</exec_depend>
-  <exec_depend>nav_msgs</exec_depend>
-  <exec_depend>rclpy</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
-  <exec_depend>tf2_ros</exec_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>go2_interfaces</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

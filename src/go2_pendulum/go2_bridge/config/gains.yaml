@@ -1,0 +1,24 @@
+go2_bridge_node:
+  ros__parameters:
+    enable_crc: true
+    # Savitzky-Golay filter for pendulum velocity estimation
+    sg_window_length: 31
+    sg_poly_order: 2
+    sg_delta: 0.001  # seconds between pose samples (1 kHz sim)
+    # Standup gains (used during standup phase, higher stiffness)
+    standup_kp: 60.0
+    standup_kd: 5.0
+    # Policy gains (per-joint, matching RL training config)
+    gains:
+      FR_hip_joint:    {kp: 25.0, kd: 0.6}
+      FR_thigh_joint:  {kp: 25.0, kd: 0.6}
+      FR_calf_joint:   {kp: 25.0, kd: 0.6}
+      FL_hip_joint:    {kp: 25.0, kd: 0.6}
+      FL_thigh_joint:  {kp: 25.0, kd: 0.6}
+      FL_calf_joint:   {kp: 25.0, kd: 0.6}
+      RR_hip_joint:    {kp: 25.0, kd: 0.6}
+      RR_thigh_joint:  {kp: 25.0, kd: 0.6}
+      RR_calf_joint:   {kp: 25.0, kd: 0.6}
+      RL_hip_joint:    {kp: 25.0, kd: 0.6}
+      RL_thigh_joint:  {kp: 25.0, kd: 0.6}
+      RL_calf_joint:   {kp: 25.0, kd: 0.6}

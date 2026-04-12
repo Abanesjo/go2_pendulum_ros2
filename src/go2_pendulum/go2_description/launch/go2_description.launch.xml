@@ -1,5 +1,4 @@
 <launch>
-  <arg name="use_sim_time" default="false"/>
   <arg name="use_gui_limits" default="false"/>
   <arg name="jointstate_gui" default="false"/>
   <arg name="urdf_file_default" default="$(find-pkg-share go2_description)/urdf/go2_description.urdf"/>
@@ -8,13 +7,11 @@
 
   <node pkg="robot_state_publisher" exec="robot_state_publisher" name="robot_state_publisher" output="screen">
     <param name="robot_description" value="$(command 'cat $(var urdf_file)')"/>
-    <param name="use_sim_time" value="$(var use_sim_time)"/>
   </node>
 
   <group if="$(var jointstate_gui)">
     <node pkg="joint_state_publisher_gui" exec="joint_state_publisher_gui" name="joint_state_publisher_gui" output="screen">
       <remap from="/joint_states" to="/joint_command"/>
-      <param name="use_sim_time" value="$(var use_sim_time)"/>
       <param name="zeros.FL_hip_joint" value="0.1"/>
       <param name="zeros.RL_hip_joint" value="0.1"/>
       <param name="zeros.FR_hip_joint" value="-0.1"/>
