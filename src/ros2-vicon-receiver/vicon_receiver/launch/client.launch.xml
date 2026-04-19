@@ -2,7 +2,7 @@
     <arg name="hostname" default="192.168.123.70" description="Vicon server hostname or IP address"/>
     <arg name="buffer_size" default="200" description="Buffer size for Vicon data"/>
     <arg name="topic_namespace" default="vicon" description="Topic namespace for Vicon messages"/>
-    <arg name="world_frame" default="map" description="World frame for the tf2 transformations"/>
+    <arg name="world_frame" default="world" description="World frame for the tf2 transformations"/>
     <arg name="vicon_frame" default="vicon" description="Vicon frame for the tf2 transformations"/>
     <arg name="map_xyz" default="[0.0, 0.0, 0.0]" description="XYZ translation for coordinate frame mapping"/>
     <arg name="map_rpy" default="[0.0, 0.0, 0.0]" description="RPY rotation for coordinate frame mapping"/>
@@ -17,5 +17,7 @@
         <param name="map_xyz" value="$(var map_xyz)"/>
         <param name="map_rpy" value="$(var map_rpy)"/>
         <param name="map_rpy_in_degrees" value="$(var map_rpy_in_degrees)"/>
+        <remap from="/vicon/base_link/base_link" to="/pose/base_link"/>
+        <remap from="/vicon/pendulum_ee/pendulum_ee" to="/pose/pendulum_ee"/>
     </node>
 </launch>

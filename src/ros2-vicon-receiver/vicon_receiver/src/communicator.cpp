@@ -254,8 +254,8 @@ void Communicator::get_frame()
                 }
             }
 
-            // Broadcast the transform
-            tf_broadcaster_->sendTransform(tf_msg);
+            // // Broadcast the transform
+            // tf_broadcaster_->sendTransform(tf_msg);
 
         }
     }
