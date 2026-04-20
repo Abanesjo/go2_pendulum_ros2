@@ -3,6 +3,9 @@
     <!-- Robot description (robot_state_publisher) -->
     <include file="$(find-pkg-share go2_description)/launch/go2_description.launch.xml"/>
 
+    <!-- Vicon Receiver -->
+    <include file="$(find-pkg-share vicon_receiver)/launch/client.launch.xml"/>
+
     <!-- go2_bridge: Unitree lowstate/lowcmd bridge -->
     <node pkg="go2_bridge" exec="go2_bridge_node" name="go2_bridge_node" output="screen">
         <param from="$(find-pkg-share go2_bridge)/config/gains.yaml"/>
