@@ -13,6 +13,7 @@ pose, pendulum joints from Vicon. No /lowstate, no /lowcmd.
 import math
 from collections import deque
 
+import message_filters
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -21,6 +22,14 @@ from scipy.signal import savgol_coeffs
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import PoseStamped, TransformStamped
 from tf2_ros import TransformBroadcaster
+
+
+def _quat_to_rotation_matrix(w, x, y, z):
+    return np.array([
+        [1 - 2 * (y*y + z*z),     2 * (x*y - z*w),     2 * (x*z + y*w)],
+        [    2 * (x*y + z*w), 1 - 2 * (x*x + z*z),     2 * (y*z - x*w)],
+        [    2 * (x*z - y*w),     2 * (y*z + x*w), 1 - 2 * (x*x + y*y)],
+    ])
 
 
 SENSOR_QOS = QoSProfile(
@@ -63,21 +72,23 @@ class Go2BridgePassiveNode(Node):
         self.declare_parameter('joint_states_rate', 50.0)
         rate_hz = float(self.get_parameter('joint_states_rate').value)
 
-        self.declare_parameter('sg_window_length', 7)
+        self.declare_parameter('sg_window_length', 21)
         self.declare_parameter('sg_poly_order', 3)
-        self.declare_parameter('sg_delta', 0.005)
+        self.declare_parameter('sg_delta', 1.0 / 240.0)
         sg_wl = self.get_parameter('sg_window_length').value
         sg_po = self.get_parameter('sg_poly_order').value
         sg_delta = self.get_parameter('sg_delta').value
 
         self._sg_coeffs_smooth = savgol_coeffs(
-            sg_wl, sg_po, deriv=0, delta=sg_delta, pos=sg_wl - 1, use='dot')
+            sg_wl, sg_po, deriv=0, delta=sg_delta, pos=sg_wl // 2, use='dot')
         self._sg_coeffs_vel = savgol_coeffs(
-            sg_wl, sg_po, deriv=1, delta=sg_delta, pos=sg_wl - 1, use='dot')
+            sg_wl, sg_po, deriv=1, delta=sg_delta, pos=sg_wl // 2, use='dot')
         self._sg_window = sg_wl
 
-        self._base_quat = None
-        self._ee_quat = None
+        self.declare_parameter('pendulum_hinge_offset', [-0.05, 0.0, 0.06])
+        self._hinge_offset = np.array(
+            self.get_parameter('pendulum_hinge_offset').value, dtype=float)
+
         self._angle_buf = [deque(maxlen=sg_wl), deque(maxlen=sg_wl)]
         self._pendulum_pos = [0.0, 0.0]
         self._pendulum_vel = [0.0, 0.0]
@@ -85,24 +96,23 @@ class Go2BridgePassiveNode(Node):
         self._joint_states_pub = self.create_publisher(JointState, '/joint_states', SENSOR_QOS)
         self._tf_broadcaster = TransformBroadcaster(self)
 
-        self._base_pose_sub = self.create_subscription(
-            PoseStamped, '/pose/base_link', self._base_pose_cb, SENSOR_QOS)
-        self._ee_pose_sub = self.create_subscription(
-            PoseStamped, '/pose/pendulum_ee', self._ee_pose_cb, SENSOR_QOS)
+        self._base_tf_sub = self.create_subscription(
+            PoseStamped, '/pose/base_link', self._base_tf_cb, SENSOR_QOS)
+
+        self._base_sync_sub = message_filters.Subscriber(
+            self, PoseStamped, '/pose/base_link', qos_profile=SENSOR_QOS)
+        self._ee_sync_sub = message_filters.Subscriber(
+            self, PoseStamped, '/pose/pendulum_ee', qos_profile=SENSOR_QOS)
+        self._pose_sync = message_filters.ApproximateTimeSynchronizer(
+            [self._base_sync_sub, self._ee_sync_sub], queue_size=10, slop=0.005)
+        self._pose_sync.registerCallback(self._synced_pose_cb)
 
         self._publish_timer = self.create_timer(1.0 / rate_hz, self._publish_joint_states)
 
         self.get_logger().info(
             f'Go2 bridge passive node started (joint_states_rate={rate_hz} Hz)')
 
-    def _base_pose_cb(self, msg: PoseStamped):
-        o = msg.pose.orientation
-        n = math.sqrt(o.w * o.w + o.x * o.x + o.y * o.y + o.z * o.z)
-        if n < 1e-9:
-            return
-        self._base_quat = (o.w / n, o.x / n, o.y / n, o.z / n)
-        self._update_pendulum_angles()
-
+    def _base_tf_cb(self, msg: PoseStamped):
         t = TransformStamped()
         t.header.stamp = self.get_clock().now().to_msg()
         t.header.frame_id = 'world'
@@ -113,36 +123,32 @@ class Go2BridgePassiveNode(Node):
         t.transform.rotation = msg.pose.orientation
         self._tf_broadcaster.sendTransform(t)
 
-    def _ee_pose_cb(self, msg: PoseStamped):
-        o = msg.pose.orientation
+    def _synced_pose_cb(self, base_msg: PoseStamped, ee_msg: PoseStamped):
+        o = base_msg.pose.orientation
         n = math.sqrt(o.w * o.w + o.x * o.x + o.y * o.y + o.z * o.z)
         if n < 1e-9:
             return
-        self._ee_quat = (o.w / n, o.x / n, o.y / n, o.z / n)
-        self._update_pendulum_angles()
+        R_base = _quat_to_rotation_matrix(o.w / n, o.x / n, o.y / n, o.z / n)
 
-    def _update_pendulum_angles(self):
-        if self._base_quat is None or self._ee_quat is None:
-            return
+        p_base = np.array([base_msg.pose.position.x,
+                           base_msg.pose.position.y,
+                           base_msg.pose.position.z])
+        p_ee = np.array([ee_msg.pose.position.x,
+                         ee_msg.pose.position.y,
+                         ee_msg.pose.position.z])
 
-        bw, bx, by, bz = self._base_quat
-        ew, ex, ey, ez = self._ee_quat
+        v = R_base.T @ (p_ee - p_base) - self._hinge_offset
 
-        cw, cx, cy, cz = bw, -bx, -by, -bz
-        rw = cw * ew - cx * ex - cy * ey - cz * ez
-        rx = cw * ex + cx * ew + cy * ez - cz * ey
-        ry = cw * ey - cx * ez + cy * ew + cz * ex
-        rz = cw * ez + cx * ey - cy * ex + cz * ew
+        joint1 = math.atan2(-v[1], v[2])
+        joint2 = math.atan2(v[0], math.hypot(v[1], v[2]))
 
-        m20 = 2.0 * (rx * rz - rw * ry)
-        m21 = 2.0 * (ry * rz + rw * rx)
-        m22 = 1.0 - 2.0 * (rx * rx + ry * ry)
-
-        joint1 = math.atan2(m21, m22)
-        joint2 = math.atan2(-m20, math.sqrt(m21 * m21 + m22 * m22))
-
-        self._angle_buf[0].append(joint1)
-        self._angle_buf[1].append(joint2)
+        if not self._angle_buf[0]:
+            for _ in range(self._sg_window):
+                self._angle_buf[0].append(joint1)
+                self._angle_buf[1].append(joint2)
+        else:
+            self._angle_buf[0].append(joint1)
+            self._angle_buf[1].append(joint2)
 
         if len(self._angle_buf[0]) >= self._sg_window:
             for j in range(2):
@@ -151,11 +157,6 @@ class Go2BridgePassiveNode(Node):
                     np.dot(self._sg_coeffs_smooth, buf))
                 self._pendulum_vel[j] = float(
                     np.dot(self._sg_coeffs_vel, buf))
-        else:
-            self._pendulum_pos[0] = joint1
-            self._pendulum_pos[1] = joint2
-            self._pendulum_vel[0] = 0.0
-            self._pendulum_vel[1] = 0.0
 
     def _publish_joint_states(self):
         js = JointState()

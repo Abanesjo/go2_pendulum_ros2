@@ -1,10 +1,12 @@
 go2_bridge_node:
   ros__parameters:
     enable_crc: true
-    # Savitzky-Golay filter for pendulum velocity estimation
-    sg_window_length: 31
-    sg_poly_order: 2
-    sg_delta: 0.001  # seconds between pose samples (1 kHz sim)
+    # Centered Savitzky-Golay filter over time-synced pose pairs (Vicon rate)
+    sg_window_length: 21
+    sg_poly_order: 3
+    sg_delta: 0.004166666666666667  # 1/240 Hz
+    # URDF pendulum_base_joint origin relative to base link
+    pendulum_hinge_offset: [-0.05, 0.0, 0.06]
     # Standup gains (used during standup phase, higher stiffness)
     standup_kp: 60.0
     standup_kd: 5.0
@@ -25,10 +27,12 @@ go2_bridge_node:
 
 go2_bridge_passive_node:
   ros__parameters:
-    # Savitzky-Golay filter for pendulum velocity estimation (matches live node)
-    sg_window_length: 31
-    sg_poly_order: 2
-    sg_delta: 0.001
+    # Centered Savitzky-Golay filter over time-synced pose pairs (Vicon rate)
+    sg_window_length: 21
+    sg_poly_order: 3
+    sg_delta: 0.004166666666666667  # 1/240 Hz
+    # URDF pendulum_base_joint origin relative to base link
+    pendulum_hinge_offset: [-0.05, 0.0, 0.06]
     # Rate at which /joint_states is published when robot is deactivated
     joint_states_rate: 50.0
     # Crouched pose for leg joints (robot folded on ground)

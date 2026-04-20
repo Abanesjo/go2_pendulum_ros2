@@ -24,6 +24,8 @@ SENSOR_QOS = QoSProfile(
     depth=1,
 )
 
+LOGGED_JOINTS = ['pendulum_joint1', 'pendulum_joint2']
+
 
 class JointStatesLoggerNode(Node):
     def __init__(self):
@@ -36,7 +38,11 @@ class JointStatesLoggerNode(Node):
         self._file = open(self._csv_path, 'w', newline='')
         self._writer = csv.writer(self._file)
 
-        self._joint_names = None
+        header = ['timestamp']
+        for n in LOGGED_JOINTS:
+            header.append(f'{n}_pos')
+            header.append(f'{n}_vel')
+        self._writer.writerow(header)
 
         self._sub = self.create_subscription(
             JointState, '/joint_states', self._cb, SENSOR_QOS)
@@ -44,18 +50,10 @@ class JointStatesLoggerNode(Node):
         self.get_logger().info(f'Logging /joint_states to {self._csv_path}')
 
     def _cb(self, msg: JointState):
-        if self._joint_names is None:
-            self._joint_names = list(msg.name)
-            header = ['timestamp']
-            for n in self._joint_names:
-                header.append(f'{n}_pos')
-                header.append(f'{n}_vel')
-            self._writer.writerow(header)
-
         t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         name_to_idx = {n: i for i, n in enumerate(msg.name)}
         row = [t]
-        for n in self._joint_names:
+        for n in LOGGED_JOINTS:
             idx = name_to_idx.get(n)
             if idx is None:
                 row.extend(['', ''])
