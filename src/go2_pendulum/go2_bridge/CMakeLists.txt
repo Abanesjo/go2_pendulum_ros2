@@ -14,5 +14,10 @@ install(PROGRAMS
   RENAME go2_bridge_node
   DESTINATION lib/${PROJECT_NAME}
 )
+install(PROGRAMS
+  scripts/go2_bridge_passive_node.py
+  RENAME go2_bridge_passive_node
+  DESTINATION lib/${PROJECT_NAME}
+)
 
 ament_package()

@@ -22,3 +22,26 @@ go2_bridge_node:
       RL_hip_joint:    {kp: 25.0, kd: 0.6}
       RL_thigh_joint:  {kp: 25.0, kd: 0.6}
       RL_calf_joint:   {kp: 25.0, kd: 0.6}
+
+go2_bridge_passive_node:
+  ros__parameters:
+    # Savitzky-Golay filter for pendulum velocity estimation (matches live node)
+    sg_window_length: 31
+    sg_poly_order: 2
+    sg_delta: 0.001
+    # Rate at which /joint_states is published when robot is deactivated
+    joint_states_rate: 50.0
+    # Crouched pose for leg joints (robot folded on ground)
+    default_joint_pos:
+      FR_hip_joint:    0.0
+      FR_thigh_joint:  1.3
+      FR_calf_joint:  -2.5
+      FL_hip_joint:    0.0
+      FL_thigh_joint:  1.3
+      FL_calf_joint:  -2.5
+      RR_hip_joint:    0.0
+      RR_thigh_joint:  1.3
+      RR_calf_joint:  -2.5
+      RL_hip_joint:    0.0
+      RL_thigh_joint:  1.3
+      RL_calf_joint:  -2.5

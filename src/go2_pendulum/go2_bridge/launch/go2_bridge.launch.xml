@@ -1,15 +1,26 @@
 <?xml version="1.0"?>
 <launch>
+    <arg name="robot_active" default="false"/>
+
     <!-- Robot description (robot_state_publisher) -->
     <include file="$(find-pkg-share go2_description)/launch/go2_description.launch.xml"/>
 
     <!-- Vicon Receiver -->
     <include file="$(find-pkg-share vicon_receiver)/launch/client.launch.xml"/>
 
-    <!-- go2_bridge: Unitree lowstate/lowcmd bridge -->
-    <node pkg="go2_bridge" exec="go2_bridge_node" name="go2_bridge_node" output="screen">
-        <param from="$(find-pkg-share go2_bridge)/config/gains.yaml"/>
-    </node>
+    <!-- Live bridge: Unitree lowstate/lowcmd (robot active) -->
+    <group if="$(var robot_active)">
+        <node pkg="go2_bridge" exec="go2_bridge_node" name="go2_bridge_node" output="screen">
+            <param from="$(find-pkg-share go2_bridge)/config/gains.yaml"/>
+        </node>
+    </group>
+
+    <!-- Passive bridge: Vicon-only (robot deactivated) -->
+    <group unless="$(var robot_active)">
+        <node pkg="go2_bridge" exec="go2_bridge_passive_node" name="go2_bridge_passive_node" output="screen">
+            <param from="$(find-pkg-share go2_bridge)/config/gains.yaml"/>
+        </node>
+    </group>
 
     <!-- rviz -->
     <node pkg="rviz2" exec="rviz2" name="rviz" args="-d $(find-pkg-share go2_bridge)/rviz/config.rviz"/>
