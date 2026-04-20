@@ -19,5 +19,10 @@ install(PROGRAMS
   RENAME go2_bridge_passive_node
   DESTINATION lib/${PROJECT_NAME}
 )
+install(PROGRAMS
+  scripts/joint_states_logger_node.py
+  RENAME joint_states_logger_node
+  DESTINATION lib/${PROJECT_NAME}
+)
 
 ament_package()

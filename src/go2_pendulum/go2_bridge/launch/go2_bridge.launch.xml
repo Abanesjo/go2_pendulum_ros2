@@ -20,6 +20,8 @@
         <node pkg="go2_bridge" exec="go2_bridge_passive_node" name="go2_bridge_passive_node" output="screen">
             <param from="$(find-pkg-share go2_bridge)/config/gains.yaml"/>
         </node>
+
+        <node pkg="go2_bridge" exec="joint_states_logger_node" name="logging"/>
     </group>
 
     <!-- rviz -->
