@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-FILENAME = 'center_joint1.csv'
+FILENAME = 'data.csv'
 
 
 def main():
