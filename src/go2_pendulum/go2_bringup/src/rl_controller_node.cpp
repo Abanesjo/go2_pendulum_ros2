@@ -33,18 +33,6 @@ static const std::array<std::string, NUM_LEG> LEG_JOINT_NAMES = {
 static const std::string PENDULUM_JOINT1_NAME = "pendulum_joint1";
 static const std::string PENDULUM_JOINT2_NAME = "pendulum_joint2";
 
-// Hard joint limits (rad) in policy order
-static constexpr std::array<float, NUM_LEG> HARD_LIMIT_LOW = {
-    -1.0472f, -1.0472f, -1.0472f, -1.0472f,   // hips
-    -1.5708f, -1.5708f, -0.5236f, -0.5236f,    // thighs (front, rear)
-    -2.7227f, -2.7227f, -2.7227f, -2.7227f,    // calfs
-};
-static constexpr std::array<float, NUM_LEG> HARD_LIMIT_HIGH = {
-     1.0472f,  1.0472f,  1.0472f,  1.0472f,
-     3.4907f,  3.4907f,  4.5379f,  4.5379f,
-    -0.83776f,-0.83776f,-0.83776f,-0.83776f,
-};
-
 static inline float wrap_to_pi(float a) {
     a = std::fmod(a + M_PI, 2.0 * M_PI);
     if (a < 0.0) a += 2.0 * M_PI;
@@ -128,9 +116,6 @@ public:
         this->declare_parameter<double>("publish_rate", 500.0);
         this->declare_parameter<double>("standup_duration", 3.0);
         this->declare_parameter<double>("action_scale", 0.25);
-        this->declare_parameter<double>("lpf_cutoff_hz", 8.0);
-        this->declare_parameter<double>("soft_limit_factor", 0.9);
-        this->declare_parameter<double>("action_bound_margin", 1.0);
         this->declare_parameter<bool>("zero_pendulum", false);
         this->declare_parameter<std::vector<double>>("default_joint_pos",
             std::vector<double>{
@@ -145,25 +130,11 @@ public:
         standup_duration_ = this->get_parameter("standup_duration").as_double();
         action_scale_ = static_cast<float>(
             this->get_parameter("action_scale").as_double());
-        float lpf_cutoff = static_cast<float>(
-            this->get_parameter("lpf_cutoff_hz").as_double());
-        soft_limit_factor_ = static_cast<float>(
-            this->get_parameter("soft_limit_factor").as_double());
-        action_bound_margin_ = static_cast<float>(
-            this->get_parameter("action_bound_margin").as_double());
         zero_pendulum_ = this->get_parameter("zero_pendulum").as_bool();
         auto default_pos_d =
             this->get_parameter("default_joint_pos").as_double_array();
         for (int i = 0; i < NUM_LEG; ++i)
             default_pos_[i] = static_cast<float>(default_pos_d[i]);
-
-        // Compute LPF alpha
-        lpf_alpha_ = std::exp(
-            -2.0f * static_cast<float>(M_PI) * lpf_cutoff *
-            static_cast<float>(control_dt_));
-
-        // Compute soft joint limits and action bounds
-        ComputeLimits();
 
         // Load policy
         RCLCPP_INFO(this->get_logger(), "Loading policy: %s", model_path.c_str());
@@ -171,7 +142,6 @@ public:
 
         // Init state
         last_action_.resize(ACTION_DIM, 0.0f);
-        filtered_action_.resize(ACTION_DIM, 0.0f);
         desired_positions_.assign(default_pos_.begin(), default_pos_.end());
 
         auto qos = rclcpp::SensorDataQoS().keep_last(1);
@@ -242,24 +212,6 @@ public:
     }
 
 private:
-    // ----- Limits computation -----
-    void ComputeLimits() {
-        for (int i = 0; i < NUM_LEG; ++i) {
-            float center = 0.5f * (HARD_LIMIT_LOW[i] + HARD_LIMIT_HIGH[i]);
-            float half = 0.5f * (HARD_LIMIT_HIGH[i] - HARD_LIMIT_LOW[i])
-                         * soft_limit_factor_;
-            soft_limit_low_[i] = center - half;
-            soft_limit_high_[i] = center + half;
-
-            float a_low = (soft_limit_low_[i] - default_pos_[i]) / action_scale_;
-            float a_high = (soft_limit_high_[i] - default_pos_[i]) / action_scale_;
-            float a_center = 0.5f * (a_low + a_high);
-            float a_half = 0.5f * (a_high - a_low) * action_bound_margin_;
-            action_low_[i] = a_center - a_half;
-            action_high_[i] = a_center + a_half;
-        }
-    }
-
     // ----- Callbacks -----
     void JointStatesCallback(
         const sensor_msgs::msg::JointState::SharedPtr msg) {
@@ -388,7 +340,6 @@ private:
 
     void ResetPolicyState() {
         std::fill(last_action_.begin(), last_action_.end(), 0.0f);
-        std::fill(filtered_action_.begin(), filtered_action_.end(), 0.0f);
         gait_index_ = 0.0f;
         std::fill(std::begin(clock_inputs_), std::end(clock_inputs_), 0.0f);
     }
@@ -495,21 +446,11 @@ private:
             // Infer
             auto raw_action = policy_->infer(obs);
 
-            // Action pipeline: clamp -> LPF -> clamp -> scale -> hard clamp
+            // Map the raw policy output directly into joint position targets.
             for (int i = 0; i < ACTION_DIM; ++i) {
-                float bounded = std::clamp(
-                    raw_action[i], action_low_[i], action_high_[i]);
-                float filtered = lpf_alpha_ * filtered_action_[i]
-                                + (1.0f - lpf_alpha_) * bounded;
-                filtered = std::clamp(
-                    filtered, action_low_[i], action_high_[i]);
-                filtered_action_[i] = filtered;
-                last_action_[i] = filtered;
-
-                float desired = default_pos_[i]
-                              + action_scale_ * filtered;
-                desired_positions_[i] = std::clamp(
-                    desired, soft_limit_low_[i], soft_limit_high_[i]);
+                last_action_[i] = raw_action[i];
+                desired_positions_[i] =
+                    default_pos_[i] + action_scale_ * raw_action[i];
             }
 
             // Update gait clock
@@ -590,20 +531,12 @@ private:
     // ----- Policy -----
     std::unique_ptr<OnnxPolicy> policy_;
     std::vector<float> last_action_;
-    std::vector<float> filtered_action_;
     std::vector<float> desired_positions_;
 
     // ----- Parameters -----
     std::array<float, NUM_LEG> default_pos_{};
     double control_dt_, standup_duration_;
-    float action_scale_, lpf_alpha_;
-    float soft_limit_factor_, action_bound_margin_;
-
-    // ----- Computed limits -----
-    std::array<float, NUM_LEG> soft_limit_low_{};
-    std::array<float, NUM_LEG> soft_limit_high_{};
-    std::array<float, NUM_LEG> action_low_{};
-    std::array<float, NUM_LEG> action_high_{};
+    float action_scale_;
 
     // ----- Sensor state -----
     std::array<float, NUM_LEG> motor_q_{};
