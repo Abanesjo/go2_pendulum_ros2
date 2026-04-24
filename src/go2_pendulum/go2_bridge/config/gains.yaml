@@ -1,10 +1,11 @@
 go2_bridge_node:
   ros__parameters:
     enable_crc: true
-    # Centered Savitzky-Golay filter over time-synced pose pairs (Vicon rate)
-    sg_window_length: 21
-    sg_poly_order: 3
+    # Causal latest-sample Savitzky-Golay filter at Vicon rate
+    sg_window_length: 7
+    sg_poly_order: 2
     sg_delta: 0.004166666666666667  # 1/240 Hz
+    max_update_rate_hz: 240.0
     # URDF pendulum_base_joint origin relative to base link
     pendulum_hinge_offset: [-0.05, 0.0, 0.06]
     # Standup gains (used during standup phase, higher stiffness)
@@ -27,9 +28,9 @@ go2_bridge_node:
 
 go2_bridge_passive_node:
   ros__parameters:
-    # Centered Savitzky-Golay filter over time-synced pose pairs (Vicon rate)
-    sg_window_length: 21
-    sg_poly_order: 3
+    # Causal latest-sample Savitzky-Golay filter at Vicon rate
+    sg_window_length: 7
+    sg_poly_order: 2
     sg_delta: 0.004166666666666667  # 1/240 Hz
     # URDF pendulum_base_joint origin relative to base link
     pendulum_hinge_offset: [-0.05, 0.0, 0.06]

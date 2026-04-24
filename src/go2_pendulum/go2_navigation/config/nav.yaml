@@ -1,5 +1,5 @@
 waypoint_manager_node:
   ros__parameters:
     waypoint_spacing: 0.05
-    waypoint_reach_threshold: 0.1
+    waypoint_reach_threshold: 0.8
     rate: 10.0

@@ -108,7 +108,8 @@ public:
     Go2RLControllerNode()
         : Node("rl_controller_node"), time_(0.0), gait_index_(0.0f),
           running_policy_(false), state_received_(false),
-          has_imu_(false), has_prev_base_(false) {
+          has_imu_(false), has_goal_target_(false), has_base_pose_(false),
+          has_prev_base_for_obs_(false) {
 
         // Declare parameters
         this->declare_parameter<std::string>("model_path", "");
@@ -253,8 +254,6 @@ private:
 
     void BasePoseCallback(
         const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
-        double now_s = this->now().seconds();
-
         Eigen::Vector3f pos(
             static_cast<float>(msg->pose.position.x),
             static_cast<float>(msg->pose.position.y),
@@ -267,23 +266,9 @@ private:
             static_cast<float>(msg->pose.orientation.z));
         quat.normalize();
 
-        // Numerical differentiation for base linear velocity
-        if (has_prev_base_) {
-            float dt = static_cast<float>(now_s - prev_base_time_);
-            if (dt > 1e-6f) {
-                Eigen::Vector3f vel_w = (pos - prev_base_pos_) / dt;
-                Eigen::Vector3f vel_b = quat.conjugate() * vel_w;
-                base_lin_vel_b_[0] = vel_b.x();
-                base_lin_vel_b_[1] = vel_b.y();
-                base_lin_vel_b_[2] = vel_b.z();
-            }
-        }
-
         base_pos_ = pos;
         base_quat_ = quat;
-        prev_base_pos_ = pos;
-        prev_base_time_ = now_s;
-        has_prev_base_ = true;
+        has_base_pose_ = true;
 
         // Extract yaw for goal tracking
         float siny = 2.0f * (quat.w() * quat.z() + quat.x() * quat.y());
@@ -300,6 +285,7 @@ private:
         float cosy = 1.0f - 2.0f * (static_cast<float>(q.y) * static_cast<float>(q.y)
                                     + static_cast<float>(q.z) * static_cast<float>(q.z));
         target_yaw_ = std::atan2(siny, cosy);
+        has_goal_target_ = true;
     }
 
     void SetGoalService(
@@ -313,6 +299,7 @@ private:
         float cosy = 1.0f - 2.0f * (static_cast<float>(q.y) * static_cast<float>(q.y)
                                     + static_cast<float>(q.z) * static_cast<float>(q.z));
         target_yaw_ = std::atan2(siny, cosy);
+        has_goal_target_ = true;
         res->success = true;
         res->message = "Goal updated";
     }
@@ -342,6 +329,27 @@ private:
         std::fill(last_action_.begin(), last_action_.end(), 0.0f);
         gait_index_ = 0.0f;
         std::fill(std::begin(clock_inputs_), std::end(clock_inputs_), 0.0f);
+        std::fill(std::begin(base_lin_vel_b_), std::end(base_lin_vel_b_), 0.0f);
+        prev_control_base_pos_ = base_pos_;
+        has_prev_base_for_obs_ = has_base_pose_;
+    }
+
+    void UpdateBaseVelocityEstimate() {
+        if (!has_base_pose_) return;
+
+        if (has_prev_base_for_obs_) {
+            const float dt = static_cast<float>(control_dt_);
+            Eigen::Vector3f vel_w = (base_pos_ - prev_control_base_pos_) / dt;
+            Eigen::Vector3f vel_b = base_quat_.conjugate() * vel_w;
+            base_lin_vel_b_[0] = vel_b.x();
+            base_lin_vel_b_[1] = vel_b.y();
+            base_lin_vel_b_[2] = vel_b.z();
+        } else {
+            std::fill(std::begin(base_lin_vel_b_), std::end(base_lin_vel_b_), 0.0f);
+        }
+
+        prev_control_base_pos_ = base_pos_;
+        has_prev_base_for_obs_ = true;
     }
 
     // ----- Main control loop (50 Hz) -----
@@ -352,6 +360,7 @@ private:
         cmd.header.stamp = this->now();
 
         time_ += control_dt_;
+        UpdateBaseVelocityEstimate();
 
         if (time_ < standup_duration_) {
             // Standup: interpolate to default positions
@@ -370,12 +379,22 @@ private:
                 }
             }
         } else {
+            if (!has_goal_target_) {
+                for (int i = 0; i < NUM_LEG; ++i)
+                    desired_positions_[i] = default_pos_[i];
+
+                RCLCPP_INFO_THROTTLE(this->get_logger(),
+                    *this->get_clock(), 2000,
+                    "Standing by at default pose, waiting for first goal target");
+                return;
+            }
+
             if (!running_policy_) {
                 running_policy_ = true;
                 RCLCPP_INFO(this->get_logger(), "Phase 2: Policy active");
             }
 
-            if (!has_imu_ || !has_prev_base_) {
+            if (!has_imu_ || !has_base_pose_) {
                 RCLCPP_WARN_THROTTLE(this->get_logger(),
                     *this->get_clock(), 2000,
                     "Waiting for /imu and /pose/base_link...");
@@ -546,11 +565,10 @@ private:
 
     // Base pose + differentiation
     Eigen::Vector3f base_pos_{Eigen::Vector3f::Zero()};
-    Eigen::Vector3f prev_base_pos_{Eigen::Vector3f::Zero()};
+    Eigen::Vector3f prev_control_base_pos_{Eigen::Vector3f::Zero()};
     Eigen::Quaternionf base_quat_{Eigen::Quaternionf::Identity()};
     float base_lin_vel_b_[3] = {};
     float base_yaw_ = 0.0f;
-    double prev_base_time_ = 0.0;
 
     // Pendulum (read from /joint_states, estimated by go2_bridge)
     float pendulum_pos_[2] = {};
@@ -569,7 +587,9 @@ private:
     bool running_policy_;
     bool state_received_;
     bool has_imu_;
-    bool has_prev_base_;
+    bool has_goal_target_;
+    bool has_base_pose_;
+    bool has_prev_base_for_obs_;
 };
 
 int main(int argc, char** argv) {

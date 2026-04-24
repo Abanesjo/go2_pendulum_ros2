@@ -3,7 +3,7 @@ rl_controller_node:
     model_path: ""  # overridden by launch file
     control_dt: 0.02            # 50 Hz policy inference
     publish_rate: 500.0         # 500 Hz joint_commands publish rate
-    standup_duration: 3.0      # seconds to interpolate to default pose
+    standup_duration: 10.0      # seconds to interpolate to default pose
     action_scale: 0.25
     zero_pendulum: false
     # Policy order: FL_hip, FR_hip, RL_hip, RR_hip,

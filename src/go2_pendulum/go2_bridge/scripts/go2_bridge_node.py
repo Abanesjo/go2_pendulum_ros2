@@ -101,10 +101,19 @@ class Go2BridgeNode(Node):
         sg_po = self.get_parameter('sg_poly_order').value
         sg_delta = self.get_parameter('sg_delta').value
 
+        self.declare_parameter('max_update_rate_hz', 240.0)
+        max_update_rate_hz = float(self.get_parameter('max_update_rate_hz').value)
+        if max_update_rate_hz > 0.0:
+            self._min_update_period_ns = int(1e9 / max_update_rate_hz)
+        else:
+            self._min_update_period_ns = 0
+        self._last_pendulum_update_ns = None
+        self._last_state_publish_ns = None
+
         self._sg_coeffs_smooth = savgol_coeffs(
-            sg_wl, sg_po, deriv=0, delta=sg_delta, pos=sg_wl // 2, use='dot')
+            sg_wl, sg_po, deriv=0, delta=sg_delta, pos=sg_wl - 1, use='dot')
         self._sg_coeffs_vel = savgol_coeffs(
-            sg_wl, sg_po, deriv=1, delta=sg_delta, pos=sg_wl // 2, use='dot')
+            sg_wl, sg_po, deriv=1, delta=sg_delta, pos=sg_wl - 1, use='dot')
         self._sg_window = sg_wl
 
         self.declare_parameter('pendulum_hinge_offset', [-0.05, 0.0, 0.06])
@@ -151,7 +160,17 @@ class Go2BridgeNode(Node):
         self._republish_timer = self.create_timer(0.002, self._republish_lowcmd)
 
         self.get_logger().info(
-            f'Go2 bridge node started (enable_crc={self._enable_crc})')
+            f'Go2 bridge node started '
+            f'(enable_crc={self._enable_crc}, max_update_rate_hz={max_update_rate_hz})')
+
+    def _rate_limited(self, last_time_ns):
+        if self._min_update_period_ns <= 0:
+            return False, self.get_clock().now().nanoseconds
+
+        now_ns = self.get_clock().now().nanoseconds
+        if last_time_ns is not None and now_ns - last_time_ns < self._min_update_period_ns:
+            return True, last_time_ns
+        return False, now_ns
 
     def _policy_active_cb(self, msg: Bool):
         if msg.data != self._policy_active:
@@ -174,6 +193,11 @@ class Go2BridgeNode(Node):
         self._tf_broadcaster.sendTransform(t)
 
     def _synced_pose_cb(self, base_msg: PoseStamped, ee_msg: PoseStamped):
+        limited, update_time_ns = self._rate_limited(self._last_pendulum_update_ns)
+        if limited:
+            return
+        self._last_pendulum_update_ns = update_time_ns
+
         o = base_msg.pose.orientation
         n = math.sqrt(o.w * o.w + o.x * o.x + o.y * o.y + o.z * o.z)
         if n < 1e-9:
@@ -210,6 +234,10 @@ class Go2BridgeNode(Node):
 
     def _lowstate_cb(self, msg: LowState):
         self._has_state = True
+        limited, publish_time_ns = self._rate_limited(self._last_state_publish_ns)
+        if limited:
+            return
+        self._last_state_publish_ns = publish_time_ns
 
         stamp = self.get_clock().now().to_msg()
 
