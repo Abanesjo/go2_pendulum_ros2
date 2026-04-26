@@ -39,13 +39,24 @@ GO2_NUM_LEG_MOTOR = 12
 POS_STOP_F = 2.146e9
 VEL_STOP_F = 16000.0
 
-# Best-effort, volatile, depth 1 — matches Unitree SDK DDS defaults
+# Best-effort, volatile, depth 1 for high-rate local robot/control topics.
 SENSOR_QOS = QoSProfile(
     reliability=ReliabilityPolicy.BEST_EFFORT,
     durability=DurabilityPolicy.VOLATILE,
     history=HistoryPolicy.KEEP_LAST,
     depth=1,
 )
+
+
+def _reliability_from_param(value):
+    value = str(value).strip().lower()
+    if value in ('reliable', 'reliability_policy_reliable'):
+        return ReliabilityPolicy.RELIABLE
+    if value in ('best_effort', 'besteffort', 'best-effort',
+                 'reliability_policy_best_effort'):
+        return ReliabilityPolicy.BEST_EFFORT
+    raise ValueError(
+        "unitree_qos_reliability must be 'reliable' or 'best_effort'")
 
 # URDF joint name -> motor index (from motor_crc.h)
 JOINT_MAP = {
@@ -76,6 +87,33 @@ class Go2BridgeNode(Node):
         # CRC toggle
         self.declare_parameter('enable_crc', True)
         self._enable_crc = self.get_parameter('enable_crc').value
+
+        # The Unitree examples use default ROS 2 QoS for /lowstate and
+        # /lowcmd, which is reliable/depth 10. Keep this configurable because
+        # the robot-side endpoint decides what is actually compatible.
+        self.declare_parameter('unitree_lowstate_qos_reliability', 'reliable')
+        self.declare_parameter('unitree_lowcmd_qos_reliability', 'best_effort')
+        self.declare_parameter('unitree_qos_depth', 10)
+        self.declare_parameter('lowcmd_publish_rate_hz', 500.0)
+        lowstate_qos_reliability = self.get_parameter(
+            'unitree_lowstate_qos_reliability').value
+        lowcmd_qos_reliability = self.get_parameter(
+            'unitree_lowcmd_qos_reliability').value
+        unitree_qos_depth = int(self.get_parameter('unitree_qos_depth').value)
+        lowcmd_publish_rate_hz = float(
+            self.get_parameter('lowcmd_publish_rate_hz').value)
+        lowstate_qos = QoSProfile(
+            reliability=_reliability_from_param(lowstate_qos_reliability),
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=unitree_qos_depth,
+        )
+        lowcmd_qos = QoSProfile(
+            reliability=_reliability_from_param(lowcmd_qos_reliability),
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=unitree_qos_depth,
+        )
 
         # Load per-joint policy gains from parameters
         self._policy_gains = {}
@@ -141,12 +179,12 @@ class Go2BridgeNode(Node):
         # Publishers
         self._joint_states_pub = self.create_publisher(JointState, '/joint_states', SENSOR_QOS)
         self._imu_pub = self.create_publisher(Imu, '/imu', SENSOR_QOS)
-        self._lowcmd_pub = self.create_publisher(LowCmd, '/lowcmd', SENSOR_QOS)
+        self._lowcmd_pub = self.create_publisher(LowCmd, '/lowcmd', lowcmd_qos)
         self._tf_broadcaster = TransformBroadcaster(self)
 
         # Subscribers
         self._lowstate_sub = self.create_subscription(
-            LowState, '/lowstate', self._lowstate_cb, SENSOR_QOS)
+            LowState, '/lowstate', self._lowstate_cb, lowstate_qos)
         self._joint_cmd_sub = self.create_subscription(
             JointState, '/joint_commands', self._joint_cmd_cb, SENSOR_QOS)
         self._policy_active_sub = self.create_subscription(
@@ -166,11 +204,17 @@ class Go2BridgeNode(Node):
         self._pose_sync.registerCallback(self._synced_pose_cb)
 
         # Republish the latest command at Unitree's expected low-level rate.
-        self._republish_timer = self.create_timer(0.002, self._republish_lowcmd)
+        self._republish_timer = self.create_timer(
+            1.0 / lowcmd_publish_rate_hz, self._republish_lowcmd)
 
         self.get_logger().info(
             f'Go2 bridge node started '
-            f'(enable_crc={self._enable_crc}, max_update_rate_hz={max_update_rate_hz})')
+            f'(enable_crc={self._enable_crc}, '
+            f'max_update_rate_hz={max_update_rate_hz}, '
+            f'lowcmd_publish_rate_hz={lowcmd_publish_rate_hz}, '
+            f'unitree_lowstate_qos_reliability={lowstate_qos_reliability}, '
+            f'unitree_lowcmd_qos_reliability={lowcmd_qos_reliability}, '
+            f'unitree_qos_depth={unitree_qos_depth})')
 
     def _rate_limited(self, last_time_ns):
         if self._min_update_period_ns <= 0:
