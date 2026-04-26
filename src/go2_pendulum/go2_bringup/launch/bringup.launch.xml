@@ -7,7 +7,7 @@
     <include file="$(find-pkg-share go2_description)/launch/go2_description.launch.xml"/>
 
     <!-- Vicon -->
-    <!-- <include file="$(find-pkg-share vicon_receiver)/launch/client.launch.xml"/> -->
+    <include file="$(find-pkg-share vicon_receiver)/launch/client.launch.xml"/>
 
     <!-- Unitree Bridge -->
     <group if="$(var bridge)">

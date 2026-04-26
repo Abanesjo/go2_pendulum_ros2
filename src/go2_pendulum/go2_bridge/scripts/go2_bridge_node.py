@@ -165,9 +165,6 @@ class Go2BridgeNode(Node):
             [self._base_sync_sub, self._ee_sync_sub], queue_size=10, slop=0.005)
         self._pose_sync.registerCallback(self._synced_pose_cb)
 
-        # 500 Hz republish timer for stable PD control
-        self._republish_timer = self.create_timer(0.002, self._republish_lowcmd)
-
         self.get_logger().info(
             f'Go2 bridge node started '
             f'(enable_crc={self._enable_crc}, max_update_rate_hz={max_update_rate_hz})')
@@ -387,11 +384,6 @@ class Go2BridgeNode(Node):
 
         self._latest_lowcmd = cmd
         self._lowcmd_pub.publish(cmd)
-
-    def _republish_lowcmd(self):
-        if self._latest_lowcmd is not None:
-            self._lowcmd_pub.publish(self._latest_lowcmd)
-
 
 def main(args=None):
     rclpy.init(args=args)

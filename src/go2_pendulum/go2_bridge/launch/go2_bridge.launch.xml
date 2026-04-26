@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <launch>
-    <arg name="robot_active" default="false"/>
+    <arg name="robot_active" default="true"/>
 
     <!-- Robot description (robot_state_publisher) -->
     <include file="$(find-pkg-share go2_description)/launch/go2_description.launch.xml"/>
