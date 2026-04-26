@@ -1,13 +1,14 @@
 go2_bridge_node:
   ros__parameters:
     enable_crc: true
-    # Match the robot-side endpoint QoS reported by `ros2 topic info -v`:
-    # /lowstate publisher is reliable, /lowcmd subscriber is best-effort.
-    # Local bridge/controller topics still use best-effort QoS.
+    # Match Unitree's working ROS 2 examples for the robot-facing endpoints.
+    # The robot reports its /lowcmd reader as best-effort, but reliable writers
+    # are compatible and match go2_stand_example's default publisher QoS.
     unitree_lowstate_qos_reliability: reliable
-    unitree_lowcmd_qos_reliability: best_effort
+    unitree_lowcmd_qos_reliability: reliable
     unitree_qos_depth: 10
     lowcmd_publish_rate_hz: 500.0
+    lowcmd_republish: true
     # Causal latest-sample Savitzky-Golay filter at Vicon rate
     sg_window_length: 7
     sg_poly_order: 2

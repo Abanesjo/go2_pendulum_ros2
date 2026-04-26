@@ -92,9 +92,10 @@ class Go2BridgeNode(Node):
         # /lowcmd, which is reliable/depth 10. Keep this configurable because
         # the robot-side endpoint decides what is actually compatible.
         self.declare_parameter('unitree_lowstate_qos_reliability', 'reliable')
-        self.declare_parameter('unitree_lowcmd_qos_reliability', 'best_effort')
+        self.declare_parameter('unitree_lowcmd_qos_reliability', 'reliable')
         self.declare_parameter('unitree_qos_depth', 10)
         self.declare_parameter('lowcmd_publish_rate_hz', 500.0)
+        self.declare_parameter('lowcmd_republish', True)
         lowstate_qos_reliability = self.get_parameter(
             'unitree_lowstate_qos_reliability').value
         lowcmd_qos_reliability = self.get_parameter(
@@ -102,6 +103,8 @@ class Go2BridgeNode(Node):
         unitree_qos_depth = int(self.get_parameter('unitree_qos_depth').value)
         lowcmd_publish_rate_hz = float(
             self.get_parameter('lowcmd_publish_rate_hz').value)
+        self._lowcmd_republish_enabled = bool(
+            self.get_parameter('lowcmd_republish').value)
         lowstate_qos = QoSProfile(
             reliability=_reliability_from_param(lowstate_qos_reliability),
             durability=DurabilityPolicy.VOLATILE,
@@ -175,6 +178,9 @@ class Go2BridgeNode(Node):
         # State tracking
         self._has_state = False
         self._latest_lowcmd = None
+        self._logged_first_lowstate = False
+        self._logged_first_joint_cmd = False
+        self._logged_first_lowcmd_publish = False
 
         # Publishers
         self._joint_states_pub = self.create_publisher(JointState, '/joint_states', SENSOR_QOS)
@@ -204,14 +210,17 @@ class Go2BridgeNode(Node):
         self._pose_sync.registerCallback(self._synced_pose_cb)
 
         # Republish the latest command at Unitree's expected low-level rate.
-        self._republish_timer = self.create_timer(
-            1.0 / lowcmd_publish_rate_hz, self._republish_lowcmd)
+        self._republish_timer = None
+        if self._lowcmd_republish_enabled:
+            self._republish_timer = self.create_timer(
+                1.0 / lowcmd_publish_rate_hz, self._republish_lowcmd)
 
         self.get_logger().info(
             f'Go2 bridge node started '
             f'(enable_crc={self._enable_crc}, '
             f'max_update_rate_hz={max_update_rate_hz}, '
             f'lowcmd_publish_rate_hz={lowcmd_publish_rate_hz}, '
+            f'lowcmd_republish={self._lowcmd_republish_enabled}, '
             f'unitree_lowstate_qos_reliability={lowstate_qos_reliability}, '
             f'unitree_lowcmd_qos_reliability={lowcmd_qos_reliability}, '
             f'unitree_qos_depth={unitree_qos_depth})')
@@ -300,6 +309,12 @@ class Go2BridgeNode(Node):
 
     def _lowstate_cb(self, msg: LowState):
         self._has_state = True
+        if not self._logged_first_lowstate:
+            self._logged_first_lowstate = True
+            self.get_logger().info(
+                f'Received first /lowstate '
+                f'(FR_hip={float(msg.motor_state[0].q):.3f})')
+
         limited, publish_time_ns = self._rate_limited(self._last_state_publish_ns)
         if limited:
             return
@@ -354,6 +369,13 @@ class Go2BridgeNode(Node):
         if self._emergency_damp:
             return
 
+        if not self._logged_first_joint_cmd:
+            self._logged_first_joint_cmd = True
+            first_target = msg.position[0] if msg.position else float('nan')
+            self.get_logger().info(
+                f'Received first /joint_commands '
+                f'(joints={len(msg.name)}, first_target={first_target:.3f})')
+
         cmd = LowCmd()
         cmd.head[0] = 0xFE
         cmd.head[1] = 0xEF
@@ -400,6 +422,8 @@ class Go2BridgeNode(Node):
             compute_crc(cmd)
 
         self._latest_lowcmd = cmd
+        if not self._lowcmd_republish_enabled:
+            self._publish_lowcmd(cmd)
 
     def _publish_damp_lowcmd(self):
         cmd = LowCmd()
@@ -428,11 +452,21 @@ class Go2BridgeNode(Node):
             compute_crc(cmd)
 
         self._latest_lowcmd = cmd
-        self._lowcmd_pub.publish(cmd)
+        self._publish_lowcmd(cmd)
 
     def _republish_lowcmd(self):
         if self._latest_lowcmd is not None:
-            self._lowcmd_pub.publish(self._latest_lowcmd)
+            self._publish_lowcmd(self._latest_lowcmd)
+
+    def _publish_lowcmd(self, cmd: LowCmd):
+        if not self._logged_first_lowcmd_publish:
+            self._logged_first_lowcmd_publish = True
+            self.get_logger().info(
+                f'Publishing first /lowcmd '
+                f'(FR_hip_q={float(cmd.motor_cmd[0].q):.3f}, '
+                f'FR_hip_kp={float(cmd.motor_cmd[0].kp):.3f}, '
+                f'FR_hip_kd={float(cmd.motor_cmd[0].kd):.3f})')
+        self._lowcmd_pub.publish(cmd)
 
 def main(args=None):
     rclpy.init(args=args)

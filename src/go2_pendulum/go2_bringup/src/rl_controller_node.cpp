@@ -112,7 +112,8 @@ public:
           has_imu_(false), has_goal_target_(false), has_base_pose_(false),
           has_prev_base_for_obs_(false), policy_start_received_(false),
           emergency_damp_(false), standup_initialized_(false),
-          command_ready_(false) {
+          command_ready_(false), logged_first_joint_state_(false),
+          logged_first_command_publish_(false) {
 
         // Declare parameters
         this->declare_parameter<std::string>("model_path", "");
@@ -259,6 +260,13 @@ private:
         state_received_ = std::all_of(
             leg_position_seen.begin(), leg_position_seen.end(),
             [](bool seen) { return seen; });
+
+        if (state_received_ && !logged_first_joint_state_) {
+            logged_first_joint_state_ = true;
+            RCLCPP_INFO(this->get_logger(),
+                "Received first complete /joint_states (FL_hip=%.3f)",
+                motor_q_[0]);
+        }
     }
 
     void ImuCallback(const sensor_msgs::msg::Imu::SharedPtr msg) {
@@ -620,6 +628,13 @@ private:
             cmd.position[i] = desired_positions_[i];
         joint_cmd_pub_->publish(cmd);
 
+        if (!logged_first_command_publish_) {
+            logged_first_command_publish_ = true;
+            RCLCPP_INFO(this->get_logger(),
+                "Published first /joint_commands (FL_hip=%.3f)",
+                desired_positions_[0]);
+        }
+
         // Publish phase indicator for bridge gain switching
         std_msgs::msg::Bool phase_msg;
         phase_msg.data = running_policy_;
@@ -725,6 +740,8 @@ private:
     bool emergency_damp_;
     bool standup_initialized_;
     bool command_ready_;
+    bool logged_first_joint_state_;
+    bool logged_first_command_publish_;
 };
 
 int main(int argc, char** argv) {

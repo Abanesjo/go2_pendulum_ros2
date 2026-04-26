@@ -7,7 +7,8 @@
     <arg name="navigation" default="true"/>
     <arg name="rviz" default="true"/>
     <arg name="lowcmd_publish_rate_hz" default="500.0"/>
-    <arg name="unitree_lowcmd_qos_reliability" default="best_effort"/>
+    <arg name="lowcmd_republish" default="true"/>
+    <arg name="unitree_lowcmd_qos_reliability" default="reliable"/>
     <arg name="model_file" default="$(find-pkg-share go2_bringup)/model/policy.onnx"/>
 
     <!-- Robot description / robot_state_publisher. Opt-in on hardware because
@@ -26,6 +27,7 @@
         <node pkg="go2_bridge" exec="go2_bridge_node" name="go2_bridge_node" output="screen">
             <param from="$(find-pkg-share go2_bridge)/config/gains.yaml"/>
             <param name="lowcmd_publish_rate_hz" value="$(var lowcmd_publish_rate_hz)"/>
+            <param name="lowcmd_republish" value="$(var lowcmd_republish)"/>
             <param name="unitree_lowcmd_qos_reliability" value="$(var unitree_lowcmd_qos_reliability)"/>
         </node>
     </group>
