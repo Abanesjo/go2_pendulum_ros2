@@ -6,7 +6,10 @@
     <!-- Robot description -->
     <include file="$(find-pkg-share go2_description)/launch/go2_description.launch.xml"/>
 
-    <!-- go2_bridge: Unitree lowstate/lowcmd bridge (for Unitree MuJoCo sim) -->
+    <!-- Vicon -->
+    <include file="$(find-pkg-share vicon_receiver)/launch/client.launch.xml"/>
+
+    <!-- Unitree Bridge -->
     <group if="$(var bridge)">
         <node pkg="go2_bridge" exec="go2_bridge_node" name="go2_bridge_node" output="screen">
             <param from="$(find-pkg-share go2_bridge)/config/gains.yaml"/>
