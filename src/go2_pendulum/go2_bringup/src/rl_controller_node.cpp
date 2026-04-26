@@ -39,6 +39,33 @@ static inline float wrap_to_pi(float a) {
     return a - M_PI;
 }
 
+enum class ControllerState {
+    SITTING,
+    STANDING_UP,
+    STANDING,
+    SITTING_DOWN,
+    POLICY,
+    DAMPED,
+};
+
+static const char* StateName(ControllerState state) {
+    switch (state) {
+        case ControllerState::SITTING:
+            return "sitting";
+        case ControllerState::STANDING_UP:
+            return "standing_up";
+        case ControllerState::STANDING:
+            return "standing";
+        case ControllerState::SITTING_DOWN:
+            return "sitting_down";
+        case ControllerState::POLICY:
+            return "policy";
+        case ControllerState::DAMPED:
+            return "damped";
+    }
+    return "unknown";
+}
+
 // ---------------------------------------------------------------------------
 // ONNX Policy wrapper (identical to g1_rl_deploy)
 // ---------------------------------------------------------------------------
@@ -110,16 +137,19 @@ public:
           startup_delay_elapsed_(0.0),
           running_policy_(false), state_received_(false),
           has_imu_(false), has_goal_target_(false), has_base_pose_(false),
-          has_prev_base_for_obs_(false), policy_start_received_(false),
-          emergency_damp_(false), standup_initialized_(false),
-          command_ready_(false), logged_first_joint_state_(false),
-          logged_first_command_publish_(false) {
+          has_prev_base_for_obs_(false), emergency_damp_(false),
+          standup_initialized_(false), command_ready_(false),
+          logged_first_joint_state_(false),
+          logged_first_command_publish_(false),
+          state_(ControllerState::SITTING), transition_elapsed_(0.0),
+          transition_duration_(0.0) {
 
         // Declare parameters
         this->declare_parameter<std::string>("model_path", "");
         this->declare_parameter<double>("control_dt", 0.02);
         this->declare_parameter<double>("publish_rate", 500.0);
         this->declare_parameter<double>("standup_duration", 3.0);
+        this->declare_parameter<double>("sit_duration", 3.0);
         this->declare_parameter<double>("action_scale", 0.25);
         this->declare_parameter<bool>("zero_pendulum", false);
         this->declare_parameter<std::vector<double>>("default_joint_pos",
@@ -127,12 +157,18 @@ public:
                 0.1, -0.1, 0.1, -0.1,      // FL/FR/RL/RR hip
                 0.8, 0.8, 1.0, 1.0,         // FL/FR/RL/RR thigh
                 -1.5, -1.5, -1.5, -1.5});   // FL/FR/RL/RR calf
+        this->declare_parameter<std::vector<double>>("sit_joint_pos",
+            std::vector<double>{
+                0.0, 0.0, 0.0, 0.0,         // FL/FR/RL/RR hip
+                1.3, 1.3, 1.3, 1.3,         // FL/FR/RL/RR thigh
+                -2.5, -2.5, -2.5, -2.5});   // FL/FR/RL/RR calf
 
         // Read parameters
         std::string model_path = this->get_parameter("model_path").as_string();
         control_dt_ = this->get_parameter("control_dt").as_double();
         double publish_rate = this->get_parameter("publish_rate").as_double();
         standup_duration_ = this->get_parameter("standup_duration").as_double();
+        sit_duration_ = this->get_parameter("sit_duration").as_double();
         action_scale_ = static_cast<float>(
             this->get_parameter("action_scale").as_double());
         zero_pendulum_ = this->get_parameter("zero_pendulum").as_bool();
@@ -140,6 +176,10 @@ public:
             this->get_parameter("default_joint_pos").as_double_array();
         for (int i = 0; i < NUM_LEG; ++i)
             default_pos_[i] = static_cast<float>(default_pos_d[i]);
+        auto sit_pos_d =
+            this->get_parameter("sit_joint_pos").as_double_array();
+        for (int i = 0; i < NUM_LEG; ++i)
+            sit_pos_[i] = static_cast<float>(sit_pos_d[i]);
 
         // Load policy
         RCLCPP_INFO(this->get_logger(), "Loading policy: %s", model_path.c_str());
@@ -179,10 +219,22 @@ public:
                 GoalCallback(msg);
             });
 
-        policy_start_sub_ = this->create_subscription<std_msgs::msg::Bool>(
-            "/policy_start_request", qos,
+        policy_toggle_sub_ = this->create_subscription<std_msgs::msg::Bool>(
+            "/policy_toggle_request", qos,
             [this](const std_msgs::msg::Bool::SharedPtr msg) {
-                PolicyStartCallback(msg);
+                PolicyToggleCallback(msg);
+            });
+
+        stand_request_sub_ = this->create_subscription<std_msgs::msg::Bool>(
+            "/stand_request", qos,
+            [this](const std_msgs::msg::Bool::SharedPtr msg) {
+                StandRequestCallback(msg);
+            });
+
+        sit_request_sub_ = this->create_subscription<std_msgs::msg::Bool>(
+            "/sit_request", qos,
+            [this](const std_msgs::msg::Bool::SharedPtr msg) {
+                SitRequestCallback(msg);
             });
 
         emergency_damp_sub_ = this->create_subscription<std_msgs::msg::Bool>(
@@ -316,9 +368,8 @@ private:
                                     + static_cast<float>(q.z) * static_cast<float>(q.z));
         target_yaw_ = std::atan2(siny, cosy);
         has_goal_target_ = true;
-        if (!running_policy_) {
-            policy_start_received_ = false;
-        }
+        RCLCPP_INFO(this->get_logger(),
+            "Goal updated; policy can be toggled from standing state");
     }
 
     void SetGoalService(
@@ -339,38 +390,34 @@ private:
                                     + static_cast<float>(q.z) * static_cast<float>(q.z));
         target_yaw_ = std::atan2(siny, cosy);
         has_goal_target_ = true;
-        if (!running_policy_) {
-            policy_start_received_ = false;
-        }
         res->success = true;
-        res->message = "Goal updated; waiting for joy start";
+        res->message = "Goal updated; policy can be toggled from standing state";
     }
 
-    void PolicyStartCallback(const std_msgs::msg::Bool::SharedPtr msg) {
-        if (!msg->data || emergency_damp_) return;
+    void PolicyToggleCallback(const std_msgs::msg::Bool::SharedPtr msg) {
+        if (!msg->data) return;
+        HandlePolicyToggle("joy button[10]");
+    }
 
-        if (time_ < standup_duration_ || !has_goal_target_) {
-            RCLCPP_WARN_THROTTLE(this->get_logger(),
-                *this->get_clock(), 2000,
-                "Ignoring joy start until standup is complete and a goal is set");
-            return;
-        }
+    void StandRequestCallback(const std_msgs::msg::Bool::SharedPtr msg) {
+        if (!msg->data) return;
+        HandleStandRequest("joy button[11]");
+    }
 
-        if (!policy_start_received_) {
-            policy_start_received_ = true;
-            RCLCPP_INFO(this->get_logger(),
-                "Joy start accepted; policy will activate when sensors are ready");
-        }
+    void SitRequestCallback(const std_msgs::msg::Bool::SharedPtr msg) {
+        if (!msg->data) return;
+        HandleSitRequest("joy button[12]");
     }
 
     void EmergencyDampCallback(const std_msgs::msg::Bool::SharedPtr msg) {
         if (!msg->data || emergency_damp_) return;
 
         emergency_damp_ = true;
+        state_ = ControllerState::DAMPED;
         running_policy_ = false;
-        policy_start_received_ = false;
         ResetPolicyState();
         SetDefaultDesiredPositions();
+        command_ready_ = true;
         RCLCPP_FATAL(this->get_logger(),
             "Emergency damping latched; publishing default targets with policy inactive");
     }
@@ -383,36 +430,167 @@ private:
             return;
         }
 
-        if (running_policy_) {
-            running_policy_ = false;
-            policy_start_received_ = false;
-            time_ = 0.0;
-            startup_delay_elapsed_ = 0.0;
-            standup_initialized_ = false;
-            command_ready_ = false;
-            ResetPolicyState();
-            res->success = true;
-            res->message = "mode=stand";
-            RCLCPP_INFO(this->get_logger(), "Mode switched to stand");
-        } else {
-            running_policy_ = false;
-            policy_start_received_ = false;
-            time_ = 0.0;  // restart standup
-            startup_delay_elapsed_ = 0.0;
-            standup_initialized_ = false;
-            command_ready_ = false;
-            ResetPolicyState();
-            res->success = true;
-            res->message = "mode=stand (waiting for goal and joy start)";
-            RCLCPP_INFO(this->get_logger(),
-                "Mode switched to stand (standing up for %.1fs first)",
-                standup_duration_);
-        }
+        const bool accepted = HandlePolicyToggle("toggle service");
+        res->success = accepted;
+        res->message = accepted
+            ? std::string("state=") + StateName(state_)
+            : std::string("policy toggle ignored in state=") + StateName(state_);
     }
 
     void SetDefaultDesiredPositions() {
         for (int i = 0; i < NUM_LEG; ++i)
             desired_positions_[i] = default_pos_[i];
+    }
+
+    void SetSitDesiredPositions() {
+        for (int i = 0; i < NUM_LEG; ++i)
+            desired_positions_[i] = sit_pos_[i];
+    }
+
+    bool BeginPoseTransition(
+        ControllerState transition_state,
+        const std::array<float, NUM_LEG>& target,
+        double duration,
+        const char* source) {
+        if (!command_ready_) {
+            RCLCPP_WARN(this->get_logger(),
+                "Ignoring %s until startup has latched measured joint positions",
+                source);
+            return false;
+        }
+
+        running_policy_ = false;
+        ResetPolicyState();
+        for (int i = 0; i < NUM_LEG; ++i) {
+            transition_start_pos_[i] = desired_positions_[i];
+            transition_target_pos_[i] = target[i];
+        }
+        transition_elapsed_ = 0.0;
+        transition_duration_ = std::max(duration, control_dt_);
+        state_ = transition_state;
+
+        RCLCPP_INFO(this->get_logger(),
+            "%s accepted; state=%s duration=%.2fs",
+            source, StateName(state_), transition_duration_);
+        return true;
+    }
+
+    void UpdatePoseTransition(ControllerState complete_state) {
+        transition_elapsed_ += control_dt_;
+        const float ratio = std::clamp(
+            static_cast<float>(transition_elapsed_ / transition_duration_),
+            0.0f, 1.0f);
+        for (int i = 0; i < NUM_LEG; ++i) {
+            desired_positions_[i] =
+                (1.0f - ratio) * transition_start_pos_[i]
+                + ratio * transition_target_pos_[i];
+        }
+
+        if (ratio >= 1.0f) {
+            state_ = complete_state;
+            if (state_ == ControllerState::STANDING) {
+                SetDefaultDesiredPositions();
+                MaybeSetDefaultGoalFromCurrentPose();
+            } else if (state_ == ControllerState::SITTING) {
+                SetSitDesiredPositions();
+            }
+            RCLCPP_INFO(this->get_logger(),
+                "Pose transition complete; state=%s", StateName(state_));
+        }
+    }
+
+    bool HandlePolicyToggle(const char* source) {
+        if (emergency_damp_) return false;
+
+        if (state_ == ControllerState::POLICY) {
+            running_policy_ = false;
+            ResetPolicyState();
+            SetDefaultDesiredPositions();
+            state_ = ControllerState::STANDING;
+            RCLCPP_INFO(this->get_logger(),
+                "%s accepted; policy stopped, state=standing", source);
+            return true;
+        }
+
+        if (state_ != ControllerState::STANDING) {
+            RCLCPP_WARN(this->get_logger(),
+                "%s ignored; policy can only start from standing "
+                "(current state=%s)",
+                source, StateName(state_));
+            return false;
+        }
+
+        if (!MaybeSetDefaultGoalFromCurrentPose()) {
+            RCLCPP_WARN(this->get_logger(),
+                "%s ignored; waiting for /pose/base_link to set default goal",
+                source);
+            return false;
+        }
+
+        running_policy_ = true;
+        ResetPolicyState();
+        SetDefaultDesiredPositions();
+        state_ = ControllerState::POLICY;
+        RCLCPP_INFO(this->get_logger(),
+            "%s accepted; policy will run when sensors are ready", source);
+        return true;
+    }
+
+    bool HandleStandRequest(const char* source) {
+        if (emergency_damp_) return false;
+
+        if (state_ == ControllerState::SITTING
+            || state_ == ControllerState::SITTING_DOWN) {
+            return BeginPoseTransition(
+                ControllerState::STANDING_UP,
+                default_pos_,
+                standup_duration_,
+                source);
+        }
+
+        RCLCPP_WARN(this->get_logger(),
+            "%s ignored; stand is valid from sitting/sitting_down "
+            "(current state=%s)",
+            source, StateName(state_));
+        return false;
+    }
+
+    bool MaybeSetDefaultGoalFromCurrentPose() {
+        if (has_goal_target_) return true;
+        if (!has_base_pose_) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(),
+                *this->get_clock(), 2000,
+                "Standing, but waiting for /pose/base_link to latch default goal");
+            return false;
+        }
+
+        target_x_ = base_pos_.x();
+        target_y_ = base_pos_.y();
+        target_yaw_ = base_yaw_;
+        has_goal_target_ = true;
+        RCLCPP_INFO(this->get_logger(),
+            "Default goal latched at current pose: x=%.3f y=%.3f yaw=%.3f",
+            target_x_, target_y_, target_yaw_);
+        return true;
+    }
+
+    bool HandleSitRequest(const char* source) {
+        if (emergency_damp_) return false;
+
+        if (state_ == ControllerState::STANDING
+            || state_ == ControllerState::STANDING_UP) {
+            return BeginPoseTransition(
+                ControllerState::SITTING_DOWN,
+                sit_pos_,
+                sit_duration_,
+                source);
+        }
+
+        RCLCPP_WARN(this->get_logger(),
+            "%s ignored; sit is valid from standing/standing_up "
+            "(current state=%s)",
+            source, StateName(state_));
+        return false;
     }
 
     void ResetPolicyState() {
@@ -448,6 +626,7 @@ private:
 
         if (emergency_damp_) {
             running_policy_ = false;
+            state_ = ControllerState::DAMPED;
             SetDefaultDesiredPositions();
             command_ready_ = true;
             return;
@@ -470,61 +649,51 @@ private:
             standup_initialized_ = true;
             command_ready_ = true;
             time_ = 0.0;
+            state_ = ControllerState::SITTING;
             RCLCPP_INFO(this->get_logger(),
-                "Standup initialized from measured joint positions");
+                "Startup initialized; holding measured sitting pose");
             return;
         }
 
         time_ += control_dt_;
         UpdateBaseVelocityEstimate();
 
-        if (time_ < standup_duration_) {
-            // Standup: interpolate to default positions
-            float ratio = std::clamp(
-                static_cast<float>(time_ / standup_duration_), 0.0f, 1.0f);
-            for (int i = 0; i < NUM_LEG; ++i) {
-                desired_positions_[i] =
-                    (1.0f - ratio) * standup_start_pos_[i]
-                    + ratio * default_pos_[i];
-            }
-            if (!running_policy_) {
-                static bool printed = false;
-                if (!printed) {
-                    RCLCPP_INFO(this->get_logger(),
-                        "Phase 1: Standing up (%.0fs)...", standup_duration_);
-                    printed = true;
-                }
-            }
-        } else {
-            if (!has_goal_target_) {
-                SetDefaultDesiredPositions();
-
-                RCLCPP_INFO_THROTTLE(this->get_logger(),
-                    *this->get_clock(), 2000,
-                    "Standing by at default pose, waiting for first goal target");
+        switch (state_) {
+            case ControllerState::SITTING:
+                running_policy_ = false;
                 return;
-            }
 
-            if (!policy_start_received_) {
-                SetDefaultDesiredPositions();
-
-                RCLCPP_INFO_THROTTLE(this->get_logger(),
-                    *this->get_clock(), 2000,
-                    "Goal received; standing by at default pose, waiting for joy button[10]");
+            case ControllerState::STANDING_UP:
+                UpdatePoseTransition(ControllerState::STANDING);
                 return;
-            }
 
-            if (!running_policy_) {
+            case ControllerState::STANDING:
+                running_policy_ = false;
+                SetDefaultDesiredPositions();
+                MaybeSetDefaultGoalFromCurrentPose();
+                return;
+
+            case ControllerState::SITTING_DOWN:
+                UpdatePoseTransition(ControllerState::SITTING);
+                return;
+
+            case ControllerState::POLICY:
                 running_policy_ = true;
-                RCLCPP_INFO(this->get_logger(), "Phase 2: Policy active");
-            }
+                SetDefaultDesiredPositions();
+                break;
 
-            if (!has_imu_ || !has_base_pose_) {
-                RCLCPP_WARN_THROTTLE(this->get_logger(),
-                    *this->get_clock(), 2000,
-                    "Waiting for /imu and /pose/base_link...");
+            case ControllerState::DAMPED:
+                running_policy_ = false;
+                SetDefaultDesiredPositions();
                 return;
-            }
+        }
+
+        if (!has_imu_ || !has_base_pose_) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(),
+                *this->get_clock(), 2000,
+                "Waiting for /imu and /pose/base_link...");
+            return;
+        }
 
             // Build 56-dim observation
             std::vector<float> obs;
@@ -606,7 +775,6 @@ private:
                     "t=%.1f pendulum=[%.3f,%.3f]",
                     time_, pendulum_pos_[0], pendulum_pos_[1]);
             }
-        }
     }
 
     // ----- Joint command publish -----
@@ -637,7 +805,8 @@ private:
 
         // Publish phase indicator for bridge gain switching
         std_msgs::msg::Bool phase_msg;
-        phase_msg.data = running_policy_;
+        phase_msg.data =
+            running_policy_ && state_ == ControllerState::POLICY;
         policy_active_pub_->publish(phase_msg);
     }
 
@@ -680,7 +849,9 @@ private:
         base_pose_sub_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr
         goal_sub_;
-    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr policy_start_sub_;
+    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr policy_toggle_sub_;
+    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr stand_request_sub_;
+    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sit_request_sub_;
     rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr emergency_damp_sub_;
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr
         joint_cmd_pub_;
@@ -698,8 +869,11 @@ private:
     // ----- Parameters -----
     static constexpr double STARTUP_DELAY_SEC = 1.0;
     std::array<float, NUM_LEG> default_pos_{};
+    std::array<float, NUM_LEG> sit_pos_{};
     std::array<float, NUM_LEG> standup_start_pos_{};
-    double control_dt_, standup_duration_;
+    std::array<float, NUM_LEG> transition_start_pos_{};
+    std::array<float, NUM_LEG> transition_target_pos_{};
+    double control_dt_, standup_duration_, sit_duration_;
     float action_scale_;
 
     // ----- Sensor state -----
@@ -736,12 +910,14 @@ private:
     bool has_goal_target_;
     bool has_base_pose_;
     bool has_prev_base_for_obs_;
-    bool policy_start_received_;
     bool emergency_damp_;
     bool standup_initialized_;
     bool command_ready_;
     bool logged_first_joint_state_;
     bool logged_first_command_publish_;
+    ControllerState state_;
+    double transition_elapsed_;
+    double transition_duration_;
 };
 
 int main(int argc, char** argv) {

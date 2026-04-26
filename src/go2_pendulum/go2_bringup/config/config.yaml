@@ -4,6 +4,7 @@ rl_controller_node:
     control_dt: 0.02            # 50 Hz policy inference
     publish_rate: 50.0         # 50 Hz joint_commands publish rate
     standup_duration: 3.0      # seconds to interpolate to default pose
+    sit_duration: 3.0          # seconds to interpolate to sit pose
     action_scale: 0.25
     zero_pendulum: false
     # Policy order: FL_hip, FR_hip, RL_hip, RR_hip,
@@ -22,3 +23,16 @@ rl_controller_node:
       - -1.5    # FR_calf
       - -1.5    # RL_calf
       - -1.5    # RR_calf
+    sit_joint_pos:
+      - 0.0     # FL_hip
+      - 0.0     # FR_hip
+      - 0.0     # RL_hip
+      - 0.0     # RR_hip
+      - 1.3     # FL_thigh
+      - 1.3     # FR_thigh
+      - 1.3     # RL_thigh
+      - 1.3     # RR_thigh
+      - -2.5    # FL_calf
+      - -2.5    # FR_calf
+      - -2.5    # RL_calf
+      - -2.5    # RR_calf
