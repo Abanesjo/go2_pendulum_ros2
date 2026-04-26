@@ -93,6 +93,13 @@ class Go2BridgeNode(Node):
         standup_kd = self.get_parameter('standup_kd').value
         self._standup_gains = {name: (standup_kp, standup_kd) for name in JOINT_NAMES}
 
+        self._damp_default_pos = {}
+        for name in JOINT_NAMES:
+            self.declare_parameter(f'damping_default_joint_pos.{name}', 0.0)
+            self._damp_default_pos[name] = float(
+                self.get_parameter(f'damping_default_joint_pos.{name}').value)
+        self._emergency_damp = False
+
         # Savitzky-Golay filter for pendulum angle/velocity (centered, 240 Hz)
         self.declare_parameter('sg_window_length', 21)
         self.declare_parameter('sg_poly_order', 3)
@@ -144,6 +151,8 @@ class Go2BridgeNode(Node):
             JointState, '/joint_commands', self._joint_cmd_cb, SENSOR_QOS)
         self._policy_active_sub = self.create_subscription(
             Bool, '/policy_active', self._policy_active_cb, SENSOR_QOS)
+        self._emergency_damp_sub = self.create_subscription(
+            Bool, '/emergency_damp', self._emergency_damp_cb, SENSOR_QOS)
 
         self._base_tf_sub = self.create_subscription(
             PoseStamped, '/pose/base_link', self._base_tf_cb, SENSOR_QOS)
@@ -173,6 +182,9 @@ class Go2BridgeNode(Node):
         return False, now_ns
 
     def _policy_active_cb(self, msg: Bool):
+        if self._emergency_damp:
+            return
+
         if msg.data != self._policy_active:
             self._policy_active = msg.data
             mode = 'policy' if self._policy_active else 'standup'
@@ -180,6 +192,16 @@ class Go2BridgeNode(Node):
             kp, kd = next(iter(gains.values()))
             self.get_logger().info(
                 f'Switched to {mode} gains (kp={kp}, kd={kd})')
+
+    def _emergency_damp_cb(self, msg: Bool):
+        if not msg.data or self._emergency_damp:
+            return
+
+        self._emergency_damp = True
+        self._policy_active = False
+        self.get_logger().fatal(
+            'Emergency damping latched: forcing zero gains and default targets')
+        self._publish_damp_lowcmd()
 
     def _base_tf_cb(self, msg: PoseStamped):
         t = TransformStamped()
@@ -285,6 +307,10 @@ class Go2BridgeNode(Node):
                 'Received /joint_commands before any /lowstate — ignoring')
             return
 
+        if self._emergency_damp:
+            self._publish_damp_lowcmd()
+            return
+
         cmd = LowCmd()
         cmd.head[0] = 0xFE
         cmd.head[1] = 0xEF
@@ -326,6 +352,35 @@ class Go2BridgeNode(Node):
                 cmd.motor_cmd[idx].tau = float(msg.effort[i])
             else:
                 cmd.motor_cmd[idx].tau = 0.0
+
+        if self._enable_crc:
+            compute_crc(cmd)
+
+        self._latest_lowcmd = cmd
+        self._lowcmd_pub.publish(cmd)
+
+    def _publish_damp_lowcmd(self):
+        cmd = LowCmd()
+        cmd.head[0] = 0xFE
+        cmd.head[1] = 0xEF
+        cmd.level_flag = 0xFF
+        cmd.gpio = 0
+
+        for i in range(GO2_NUM_MOTOR):
+            cmd.motor_cmd[i].mode = 0x01
+            cmd.motor_cmd[i].q = POS_STOP_F
+            cmd.motor_cmd[i].kp = 0.0
+            cmd.motor_cmd[i].dq = VEL_STOP_F
+            cmd.motor_cmd[i].kd = 0.0
+            cmd.motor_cmd[i].tau = 0.0
+
+        for name in JOINT_NAMES:
+            idx = JOINT_MAP[name]
+            cmd.motor_cmd[idx].q = self._damp_default_pos[name]
+            cmd.motor_cmd[idx].kp = 0.0
+            cmd.motor_cmd[idx].dq = 0.0
+            cmd.motor_cmd[idx].kd = 0.0
+            cmd.motor_cmd[idx].tau = 0.0
 
         if self._enable_crc:
             compute_crc(cmd)

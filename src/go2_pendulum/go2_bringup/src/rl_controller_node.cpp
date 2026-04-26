@@ -109,7 +109,8 @@ public:
         : Node("rl_controller_node"), time_(0.0), gait_index_(0.0f),
           running_policy_(false), state_received_(false),
           has_imu_(false), has_goal_target_(false), has_base_pose_(false),
-          has_prev_base_for_obs_(false) {
+          has_prev_base_for_obs_(false), policy_start_received_(false),
+          emergency_damp_(false) {
 
         // Declare parameters
         this->declare_parameter<std::string>("model_path", "");
@@ -173,6 +174,18 @@ public:
             "/goal", qos,
             [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
                 GoalCallback(msg);
+            });
+
+        policy_start_sub_ = this->create_subscription<std_msgs::msg::Bool>(
+            "/policy_start_request", qos,
+            [this](const std_msgs::msg::Bool::SharedPtr msg) {
+                PolicyStartCallback(msg);
+            });
+
+        emergency_damp_sub_ = this->create_subscription<std_msgs::msg::Bool>(
+            "/emergency_damp", qos,
+            [this](const std_msgs::msg::Bool::SharedPtr msg) {
+                EmergencyDampCallback(msg);
             });
 
         // Publishers
@@ -277,6 +290,8 @@ private:
     }
 
     void GoalCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+        if (emergency_damp_) return;
+
         target_x_ = static_cast<float>(msg->pose.position.x);
         target_y_ = static_cast<float>(msg->pose.position.y);
         auto& q = msg->pose.orientation;
@@ -286,11 +301,20 @@ private:
                                     + static_cast<float>(q.z) * static_cast<float>(q.z));
         target_yaw_ = std::atan2(siny, cosy);
         has_goal_target_ = true;
+        if (!running_policy_) {
+            policy_start_received_ = false;
+        }
     }
 
     void SetGoalService(
         const go2_interfaces::srv::SetGoal::Request::SharedPtr req,
         go2_interfaces::srv::SetGoal::Response::SharedPtr res) {
+        if (emergency_damp_) {
+            res->success = false;
+            res->message = "Emergency damping latched; restart launch to continue";
+            return;
+        }
+
         target_x_ = static_cast<float>(req->goal.pose.position.x);
         target_y_ = static_cast<float>(req->goal.pose.position.y);
         auto& q = req->goal.pose.orientation;
@@ -300,14 +324,53 @@ private:
                                     + static_cast<float>(q.z) * static_cast<float>(q.z));
         target_yaw_ = std::atan2(siny, cosy);
         has_goal_target_ = true;
+        if (!running_policy_) {
+            policy_start_received_ = false;
+        }
         res->success = true;
-        res->message = "Goal updated";
+        res->message = "Goal updated; waiting for joy start";
+    }
+
+    void PolicyStartCallback(const std_msgs::msg::Bool::SharedPtr msg) {
+        if (!msg->data || emergency_damp_) return;
+
+        if (time_ < standup_duration_ || !has_goal_target_) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(),
+                *this->get_clock(), 2000,
+                "Ignoring joy start until standup is complete and a goal is set");
+            return;
+        }
+
+        if (!policy_start_received_) {
+            policy_start_received_ = true;
+            RCLCPP_INFO(this->get_logger(),
+                "Joy start accepted; policy will activate when sensors are ready");
+        }
+    }
+
+    void EmergencyDampCallback(const std_msgs::msg::Bool::SharedPtr msg) {
+        if (!msg->data || emergency_damp_) return;
+
+        emergency_damp_ = true;
+        running_policy_ = false;
+        policy_start_received_ = false;
+        ResetPolicyState();
+        SetDefaultDesiredPositions();
+        RCLCPP_FATAL(this->get_logger(),
+            "Emergency damping latched; publishing default targets with policy inactive");
     }
 
     void TogglePolicyMode(
         std_srvs::srv::Trigger::Response::SharedPtr res) {
+        if (emergency_damp_) {
+            res->success = false;
+            res->message = "Emergency damping latched; restart launch to continue";
+            return;
+        }
+
         if (running_policy_) {
             running_policy_ = false;
+            policy_start_received_ = false;
             time_ = 0.0;
             ResetPolicyState();
             res->success = true;
@@ -315,14 +378,20 @@ private:
             RCLCPP_INFO(this->get_logger(), "Mode switched to stand");
         } else {
             running_policy_ = false;
+            policy_start_received_ = false;
             time_ = 0.0;  // restart standup
             ResetPolicyState();
             res->success = true;
-            res->message = "mode=policy (standup first)";
+            res->message = "mode=stand (waiting for goal and joy start)";
             RCLCPP_INFO(this->get_logger(),
-                "Mode switched to policy (standing up for %.1fs first)",
+                "Mode switched to stand (standing up for %.1fs first)",
                 standup_duration_);
         }
+    }
+
+    void SetDefaultDesiredPositions() {
+        for (int i = 0; i < NUM_LEG; ++i)
+            desired_positions_[i] = default_pos_[i];
     }
 
     void ResetPolicyState() {
@@ -356,8 +425,11 @@ private:
     void Control() {
         if (!state_received_) return;
 
-        sensor_msgs::msg::JointState cmd;
-        cmd.header.stamp = this->now();
+        if (emergency_damp_) {
+            running_policy_ = false;
+            SetDefaultDesiredPositions();
+            return;
+        }
 
         time_ += control_dt_;
         UpdateBaseVelocityEstimate();
@@ -380,12 +452,20 @@ private:
             }
         } else {
             if (!has_goal_target_) {
-                for (int i = 0; i < NUM_LEG; ++i)
-                    desired_positions_[i] = default_pos_[i];
+                SetDefaultDesiredPositions();
 
                 RCLCPP_INFO_THROTTLE(this->get_logger(),
                     *this->get_clock(), 2000,
                     "Standing by at default pose, waiting for first goal target");
+                return;
+            }
+
+            if (!policy_start_received_) {
+                SetDefaultDesiredPositions();
+
+                RCLCPP_INFO_THROTTLE(this->get_logger(),
+                    *this->get_clock(), 2000,
+                    "Goal received; standing by at default pose, waiting for joy button[10]");
                 return;
             }
 
@@ -539,6 +619,8 @@ private:
         base_pose_sub_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr
         goal_sub_;
+    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr policy_start_sub_;
+    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr emergency_damp_sub_;
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr
         joint_cmd_pub_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr policy_active_pub_;
@@ -590,6 +672,8 @@ private:
     bool has_goal_target_;
     bool has_base_pose_;
     bool has_prev_base_for_obs_;
+    bool policy_start_received_;
+    bool emergency_damp_;
 };
 
 int main(int argc, char** argv) {

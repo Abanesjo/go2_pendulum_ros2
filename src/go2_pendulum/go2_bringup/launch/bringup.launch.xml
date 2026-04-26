@@ -7,7 +7,7 @@
     <include file="$(find-pkg-share go2_description)/launch/go2_description.launch.xml"/>
 
     <!-- Vicon -->
-    <include file="$(find-pkg-share vicon_receiver)/launch/client.launch.xml"/>
+    <!-- <include file="$(find-pkg-share vicon_receiver)/launch/client.launch.xml"/> -->
 
     <!-- Unitree Bridge -->
     <group if="$(var bridge)">
@@ -21,6 +21,12 @@
         <param from="$(find-pkg-share go2_bringup)/config/config.yaml"/>
         <param name="model_path" value="$(var model_file)"/>
     </node>
+
+    <!-- Joystick input -->
+    <node pkg="joy" exec="joy_node" name="joy_node" output="screen"/>
+
+    <!-- Joy safety/start orchestrator -->
+    <node pkg="go2_bringup" exec="joy_orchestrator_node.py" name="joy_orchestrator_node" output="screen"/>
 
     <!-- Waypoint navigation -->
     <node pkg="go2_navigation" exec="waypoint_manager_node" name="waypoint_manager_node" output="screen">

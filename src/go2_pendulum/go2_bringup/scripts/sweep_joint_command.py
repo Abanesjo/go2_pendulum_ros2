@@ -67,7 +67,7 @@ class JointSweepPublisher(Node):
         qos = QoSProfile(
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=1,
-            reliability=QoSReliabilityPolicy.RELIABLE,
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
             durability=QoSDurabilityPolicy.VOLATILE,
         )
         self.pub = self.create_publisher(JointState, self.joint_command_topic, qos)

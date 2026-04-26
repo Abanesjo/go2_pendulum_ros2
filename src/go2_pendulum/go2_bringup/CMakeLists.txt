@@ -36,6 +36,7 @@ install(
 # Utility Python scripts (kept for debugging/testing)
 ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS
+  scripts/joy_orchestrator_node.py
   scripts/sweep_joint_command.py
   scripts/publish_gait_cycle.py
   scripts/record_policy_debug.py
