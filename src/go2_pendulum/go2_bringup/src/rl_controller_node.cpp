@@ -107,10 +107,12 @@ class Go2RLControllerNode : public rclcpp::Node {
 public:
     Go2RLControllerNode()
         : Node("rl_controller_node"), time_(0.0), gait_index_(0.0f),
+          startup_delay_elapsed_(0.0),
           running_policy_(false), state_received_(false),
           has_imu_(false), has_goal_target_(false), has_base_pose_(false),
           has_prev_base_for_obs_(false), policy_start_received_(false),
-          emergency_damp_(false) {
+          emergency_damp_(false), standup_initialized_(false),
+          command_ready_(false) {
 
         // Declare parameters
         this->declare_parameter<std::string>("model_path", "");
@@ -144,7 +146,7 @@ public:
 
         // Init state
         last_action_.resize(ACTION_DIM, 0.0f);
-        desired_positions_.assign(default_pos_.begin(), default_pos_.end());
+        desired_positions_.resize(NUM_LEG, 0.0f);
 
         auto qos = rclcpp::SensorDataQoS().keep_last(1);
 
@@ -229,11 +231,14 @@ private:
     // ----- Callbacks -----
     void JointStatesCallback(
         const sensor_msgs::msg::JointState::SharedPtr msg) {
+        std::array<bool, NUM_LEG> leg_position_seen{};
         for (size_t j = 0; j < msg->name.size(); ++j) {
             for (int i = 0; i < NUM_LEG; ++i) {
                 if (msg->name[j] == LEG_JOINT_NAMES[i]) {
-                    if (j < msg->position.size())
+                    if (j < msg->position.size()) {
                         motor_q_[i] = static_cast<float>(msg->position[j]);
+                        leg_position_seen[i] = true;
+                    }
                     if (j < msg->velocity.size())
                         motor_dq_[i] = static_cast<float>(msg->velocity[j]);
                     break;
@@ -251,7 +256,9 @@ private:
                     pendulum_vel_[1] = static_cast<float>(msg->velocity[j]);
             }
         }
-        state_received_ = true;
+        state_received_ = std::all_of(
+            leg_position_seen.begin(), leg_position_seen.end(),
+            [](bool seen) { return seen; });
     }
 
     void ImuCallback(const sensor_msgs::msg::Imu::SharedPtr msg) {
@@ -372,6 +379,9 @@ private:
             running_policy_ = false;
             policy_start_received_ = false;
             time_ = 0.0;
+            startup_delay_elapsed_ = 0.0;
+            standup_initialized_ = false;
+            command_ready_ = false;
             ResetPolicyState();
             res->success = true;
             res->message = "mode=stand";
@@ -380,6 +390,9 @@ private:
             running_policy_ = false;
             policy_start_received_ = false;
             time_ = 0.0;  // restart standup
+            startup_delay_elapsed_ = 0.0;
+            standup_initialized_ = false;
+            command_ready_ = false;
             ResetPolicyState();
             res->success = true;
             res->message = "mode=stand (waiting for goal and joy start)";
@@ -428,6 +441,29 @@ private:
         if (emergency_damp_) {
             running_policy_ = false;
             SetDefaultDesiredPositions();
+            command_ready_ = true;
+            return;
+        }
+
+        if (!standup_initialized_) {
+            startup_delay_elapsed_ += control_dt_;
+            if (startup_delay_elapsed_ < STARTUP_DELAY_SEC) {
+                RCLCPP_INFO_THROTTLE(this->get_logger(),
+                    *this->get_clock(), 2000,
+                    "Waiting %.1fs before standup initialization",
+                    STARTUP_DELAY_SEC);
+                return;
+            }
+
+            standup_start_pos_ = motor_q_;
+            for (int i = 0; i < NUM_LEG; ++i)
+                desired_positions_[i] = standup_start_pos_[i];
+
+            standup_initialized_ = true;
+            command_ready_ = true;
+            time_ = 0.0;
+            RCLCPP_INFO(this->get_logger(),
+                "Standup initialized from measured joint positions");
             return;
         }
 
@@ -440,7 +476,8 @@ private:
                 static_cast<float>(time_ / standup_duration_), 0.0f, 1.0f);
             for (int i = 0; i < NUM_LEG; ++i) {
                 desired_positions_[i] =
-                    (1.0f - ratio) * motor_q_[i] + ratio * default_pos_[i];
+                    (1.0f - ratio) * standup_start_pos_[i]
+                    + ratio * default_pos_[i];
             }
             if (!running_policy_) {
                 static bool printed = false;
@@ -564,8 +601,17 @@ private:
         }
     }
 
-    // ----- 500 Hz publish -----
+    // ----- Joint command publish -----
     void PublishCommand() {
+        // Avoid sending a first-frame jump to default pose before standup
+        // has latched the measured joint state as its start pose.
+        if (!command_ready_) {
+            std_msgs::msg::Bool phase_msg;
+            phase_msg.data = false;
+            policy_active_pub_->publish(phase_msg);
+            return;
+        }
+
         sensor_msgs::msg::JointState cmd;
         cmd.header.stamp = this->now();
         cmd.name.assign(LEG_JOINT_NAMES.begin(), LEG_JOINT_NAMES.end());
@@ -635,7 +681,9 @@ private:
     std::vector<float> desired_positions_;
 
     // ----- Parameters -----
+    static constexpr double STARTUP_DELAY_SEC = 1.0;
     std::array<float, NUM_LEG> default_pos_{};
+    std::array<float, NUM_LEG> standup_start_pos_{};
     double control_dt_, standup_duration_;
     float action_scale_;
 
@@ -666,6 +714,7 @@ private:
     float gait_index_;
     float clock_inputs_[4] = {};
     double time_;
+    double startup_delay_elapsed_;
     bool running_policy_;
     bool state_received_;
     bool has_imu_;
@@ -674,6 +723,8 @@ private:
     bool has_prev_base_for_obs_;
     bool policy_start_received_;
     bool emergency_damp_;
+    bool standup_initialized_;
+    bool command_ready_;
 };
 
 int main(int argc, char** argv) {
