@@ -7,7 +7,7 @@
     <arg name="navigation" default="true"/>
     <arg name="rviz" default="true"/>
     <arg name="lowcmd_publish_rate_hz" default="500.0"/>
-    <arg name="lowcmd_republish" default="true"/>
+    <arg name="lowcmd_republish" default="false"/>
     <arg name="unitree_lowcmd_qos_reliability" default="reliable"/>
     <arg name="model_file" default="$(find-pkg-share go2_bringup)/model/policy.onnx"/>
 
