@@ -139,6 +139,7 @@ public:
           has_imu_(false), has_goal_target_(false), has_base_pose_(false),
           has_prev_base_for_obs_(false), emergency_damp_(false),
           standup_initialized_(false), command_ready_(false),
+          standup_goal_latched_(false),
           logged_first_joint_state_(false),
           logged_first_command_publish_(false),
           state_(ControllerState::SITTING), transition_elapsed_(0.0),
@@ -358,6 +359,12 @@ private:
 
     void GoalCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
         if (emergency_damp_) return;
+        if (!CanAcceptExternalGoal()) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(),
+                *this->get_clock(), 2000,
+                "Ignoring /goal until policy is active");
+            return;
+        }
 
         target_x_ = static_cast<float>(msg->pose.position.x);
         target_y_ = static_cast<float>(msg->pose.position.y);
@@ -369,7 +376,7 @@ private:
         target_yaw_ = std::atan2(siny, cosy);
         has_goal_target_ = true;
         RCLCPP_INFO(this->get_logger(),
-            "Goal updated; policy can be toggled from standing state");
+            "Goal updated while policy is active");
     }
 
     void SetGoalService(
@@ -378,6 +385,11 @@ private:
         if (emergency_damp_) {
             res->success = false;
             res->message = "Emergency damping latched; restart launch to continue";
+            return;
+        }
+        if (!CanAcceptExternalGoal()) {
+            res->success = false;
+            res->message = "Ignoring goal until policy is active";
             return;
         }
 
@@ -391,7 +403,7 @@ private:
         target_yaw_ = std::atan2(siny, cosy);
         has_goal_target_ = true;
         res->success = true;
-        res->message = "Goal updated; policy can be toggled from standing state";
+        res->message = "Goal updated while policy is active";
     }
 
     void PolicyToggleCallback(const std_msgs::msg::Bool::SharedPtr msg) {
@@ -461,6 +473,10 @@ private:
 
         running_policy_ = false;
         ResetPolicyState();
+        if (transition_state == ControllerState::STANDING_UP) {
+            has_goal_target_ = false;
+            standup_goal_latched_ = false;
+        }
         for (int i = 0; i < NUM_LEG; ++i) {
             transition_start_pos_[i] = desired_positions_[i];
             transition_target_pos_[i] = target[i];
@@ -490,7 +506,7 @@ private:
             state_ = complete_state;
             if (state_ == ControllerState::STANDING) {
                 SetDefaultDesiredPositions();
-                MaybeSetDefaultGoalFromCurrentPose();
+                LatchGoalFromCurrentPose(true, "standup complete");
             } else if (state_ == ControllerState::SITTING) {
                 SetSitDesiredPositions();
             }
@@ -507,6 +523,7 @@ private:
             ResetPolicyState();
             SetDefaultDesiredPositions();
             state_ = ControllerState::STANDING;
+            LatchGoalFromCurrentPose(true, "policy stopped");
             RCLCPP_INFO(this->get_logger(),
                 "%s accepted; policy stopped, state=standing", source);
             return true;
@@ -520,7 +537,8 @@ private:
             return false;
         }
 
-        if (!MaybeSetDefaultGoalFromCurrentPose()) {
+        if (!standup_goal_latched_
+            && !LatchGoalFromCurrentPose(true, "policy toggle")) {
             RCLCPP_WARN(this->get_logger(),
                 "%s ignored; waiting for /pose/base_link to set default goal",
                 source);
@@ -555,12 +573,17 @@ private:
         return false;
     }
 
-    bool MaybeSetDefaultGoalFromCurrentPose() {
-        if (has_goal_target_) return true;
+    bool CanAcceptExternalGoal() const {
+        return standup_goal_latched_ && state_ == ControllerState::POLICY;
+    }
+
+    bool LatchGoalFromCurrentPose(bool force, const char* source) {
+        if (!force && has_goal_target_) return true;
         if (!has_base_pose_) {
             RCLCPP_WARN_THROTTLE(this->get_logger(),
                 *this->get_clock(), 2000,
-                "Standing, but waiting for /pose/base_link to latch default goal");
+                "%s: waiting for /pose/base_link to latch current-pose goal",
+                source);
             return false;
         }
 
@@ -568,9 +591,10 @@ private:
         target_y_ = base_pos_.y();
         target_yaw_ = base_yaw_;
         has_goal_target_ = true;
+        standup_goal_latched_ = true;
         RCLCPP_INFO(this->get_logger(),
-            "Default goal latched at current pose: x=%.3f y=%.3f yaw=%.3f",
-            target_x_, target_y_, target_yaw_);
+            "%s: goal latched at current pose x=%.3f y=%.3f yaw=%.3f",
+            source, target_x_, target_y_, target_yaw_);
         return true;
     }
 
@@ -670,7 +694,9 @@ private:
             case ControllerState::STANDING:
                 running_policy_ = false;
                 SetDefaultDesiredPositions();
-                MaybeSetDefaultGoalFromCurrentPose();
+                if (!standup_goal_latched_) {
+                    LatchGoalFromCurrentPose(true, "standup complete");
+                }
                 return;
 
             case ControllerState::SITTING_DOWN:
@@ -913,6 +939,7 @@ private:
     bool emergency_damp_;
     bool standup_initialized_;
     bool command_ready_;
+    bool standup_goal_latched_;
     bool logged_first_joint_state_;
     bool logged_first_command_publish_;
     ControllerState state_;

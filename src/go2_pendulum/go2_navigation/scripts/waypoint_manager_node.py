@@ -6,6 +6,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
+from std_msgs.msg import Bool
 
 SENSOR_QOS = QoSProfile(
     reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -58,6 +59,7 @@ class WaypointManagerNode(Node):
 
         self._waypoints = []
         self._wp_index = 0
+        self._policy_active = False
 
         self._goal_pub = self.create_publisher(PoseStamped, '/goal', SENSOR_QOS)
         self._path_pub = self.create_publisher(Path, '/plan', SENSOR_QOS)
@@ -66,6 +68,8 @@ class WaypointManagerNode(Node):
             PoseStamped, '/goal_pose', self._goal_pose_cb, SENSOR_QOS)
         self.create_subscription(
             PoseStamped, '/pose/base_link', self._base_pose_cb, SENSOR_QOS)
+        self.create_subscription(
+            Bool, '/policy_active', self._policy_active_cb, SENSOR_QOS)
 
         self._timer = self.create_timer(1.0 / rate, self._tick)
 
@@ -129,6 +133,22 @@ class WaypointManagerNode(Node):
 
         self.get_logger().info(
             f'New path: {len(self._waypoints)} waypoints over {dist:.2f}m')
+
+    def _policy_active_cb(self, msg: Bool):
+        was_active = self._policy_active
+        self._policy_active = msg.data
+        if was_active and not self._policy_active and self._waypoints:
+            self._waypoints = []
+            self._wp_index = 0
+            self._publish_empty_path()
+            self.get_logger().info(
+                'Policy stopped; cleared active waypoint plan')
+
+    def _publish_empty_path(self):
+        path = Path()
+        path.header.stamp = self.get_clock().now().to_msg()
+        path.header.frame_id = 'world'
+        self._path_pub.publish(path)
 
     def _tick(self):
         if not self._waypoints:
