@@ -5,6 +5,7 @@
     <arg name="vicon" default="true"/>
     <arg name="joy" default="true"/>
     <arg name="navigation" default="true"/>
+    <arg name="logging" default="true"/>
     <arg name="rviz" default="true"/>
     <arg name="lowcmd_publish_rate_hz" default="500.0"/>
     <arg name="lowcmd_republish" default="false"/>
@@ -51,6 +52,11 @@
         <node pkg="go2_navigation" exec="waypoint_manager_node" name="waypoint_manager_node" output="screen">
             <param from="$(find-pkg-share go2_navigation)/config/nav.yaml"/>
         </node>
+    </group>
+
+    <!-- CSV logging -->
+    <group if="$(var logging)">
+        <node pkg="go2_bridge" exec="joint_states_logger_node" name="logging" output="screen"/>
     </group>
 
     <!-- rviz -->
