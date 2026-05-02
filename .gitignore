@@ -4,3 +4,4 @@
 **/log/
 **/install/
 .cache
+src/go2_pendulum/go2_bridge/data/**
