@@ -152,6 +152,7 @@ public:
         this->declare_parameter<double>("standup_duration", 3.0);
         this->declare_parameter<double>("sit_duration", 3.0);
         this->declare_parameter<double>("action_scale", 0.25);
+        this->declare_parameter<double>("joint_command_lpf_cutoff_hz", 0.0);
         this->declare_parameter<bool>("zero_pendulum", false);
         this->declare_parameter<std::vector<double>>("default_joint_pos",
             std::vector<double>{
@@ -172,6 +173,10 @@ public:
         sit_duration_ = this->get_parameter("sit_duration").as_double();
         action_scale_ = static_cast<float>(
             this->get_parameter("action_scale").as_double());
+        joint_command_lpf_cutoff_hz_ =
+            this->get_parameter("joint_command_lpf_cutoff_hz").as_double();
+        command_filter_alpha_ = ComputeLowPassAlpha(
+            joint_command_lpf_cutoff_hz_, control_dt_);
         zero_pendulum_ = this->get_parameter("zero_pendulum").as_bool();
         auto default_pos_d =
             this->get_parameter("default_joint_pos").as_double_array();
@@ -277,11 +282,24 @@ public:
             [this] { PublishCommand(); });
 
         RCLCPP_INFO(this->get_logger(),
-            "Go2 RL controller ready (control=%.0fHz, publish=%.0fHz)",
-            1.0 / control_dt_, publish_rate);
+            "Go2 RL controller ready (control=%.0fHz, publish=%.0fHz, "
+            "joint_command_lpf=%.2fHz, alpha=%.3f)",
+            1.0 / control_dt_, publish_rate,
+            joint_command_lpf_cutoff_hz_, command_filter_alpha_);
     }
 
 private:
+    static float ComputeLowPassAlpha(double cutoff_hz, double dt) {
+        if (!std::isfinite(cutoff_hz) || cutoff_hz <= 0.0
+            || !std::isfinite(dt) || dt <= 0.0) {
+            return 1.0f;
+        }
+
+        const double alpha =
+            1.0 - std::exp(-2.0 * M_PI * cutoff_hz * dt);
+        return std::clamp(static_cast<float>(alpha), 0.0f, 1.0f);
+    }
+
     // ----- Callbacks -----
     void JointStatesCallback(
         const sensor_msgs::msg::JointState::SharedPtr msg) {
@@ -548,6 +566,7 @@ private:
         running_policy_ = true;
         ResetPolicyState();
         SetDefaultDesiredPositions();
+        ResetJointCommandFilterToDesired();
         state_ = ControllerState::POLICY;
         RCLCPP_INFO(this->get_logger(),
             "%s accepted; policy will run when sensors are ready", source);
@@ -619,11 +638,30 @@ private:
 
     void ResetPolicyState() {
         std::fill(last_action_.begin(), last_action_.end(), 0.0f);
+        command_filter_initialized_ = false;
         gait_index_ = 0.0f;
         std::fill(std::begin(clock_inputs_), std::end(clock_inputs_), 0.0f);
         std::fill(std::begin(base_lin_vel_b_), std::end(base_lin_vel_b_), 0.0f);
         prev_control_base_pos_ = base_pos_;
         has_prev_base_for_obs_ = has_base_pose_;
+    }
+
+    void ResetJointCommandFilterToDesired() {
+        for (int i = 0; i < NUM_LEG; ++i)
+            filtered_desired_positions_[i] = desired_positions_[i];
+        command_filter_initialized_ = true;
+    }
+
+    void ApplyJointCommandLowPass(
+        const std::array<float, NUM_LEG>& target_positions) {
+        if (!command_filter_initialized_)
+            ResetJointCommandFilterToDesired();
+
+        for (int i = 0; i < NUM_LEG; ++i) {
+            filtered_desired_positions_[i] += command_filter_alpha_
+                * (target_positions[i] - filtered_desired_positions_[i]);
+            desired_positions_[i] = filtered_desired_positions_[i];
+        }
     }
 
     void UpdateBaseVelocityEstimate() {
@@ -718,6 +756,7 @@ private:
             RCLCPP_WARN_THROTTLE(this->get_logger(),
                 *this->get_clock(), 2000,
                 "Waiting for /imu and /pose/base_link...");
+            ResetJointCommandFilterToDesired();
             return;
         }
 
@@ -785,12 +824,15 @@ private:
             // Infer
             auto raw_action = policy_->infer(obs);
 
-            // Map the raw policy output directly into joint position targets.
+            // Keep prev_action raw for the next observation, then filter only
+            // the joint position command sent to the robot.
+            std::array<float, NUM_LEG> raw_desired_positions{};
             for (int i = 0; i < ACTION_DIM; ++i) {
                 last_action_[i] = raw_action[i];
-                desired_positions_[i] =
+                raw_desired_positions[i] =
                     default_pos_[i] + action_scale_ * raw_action[i];
             }
+            ApplyJointCommandLowPass(raw_desired_positions);
 
             // Update gait clock
             UpdateClockInputs();
@@ -891,6 +933,7 @@ private:
     std::unique_ptr<OnnxPolicy> policy_;
     std::vector<float> last_action_;
     std::vector<float> desired_positions_;
+    std::array<float, NUM_LEG> filtered_desired_positions_{};
 
     // ----- Parameters -----
     static constexpr double STARTUP_DELAY_SEC = 1.0;
@@ -900,7 +943,9 @@ private:
     std::array<float, NUM_LEG> transition_start_pos_{};
     std::array<float, NUM_LEG> transition_target_pos_{};
     double control_dt_, standup_duration_, sit_duration_;
+    double joint_command_lpf_cutoff_hz_;
     float action_scale_;
+    float command_filter_alpha_ = 1.0f;
 
     // ----- Sensor state -----
     std::array<float, NUM_LEG> motor_q_{};
@@ -939,6 +984,7 @@ private:
     bool emergency_damp_;
     bool standup_initialized_;
     bool command_ready_;
+    bool command_filter_initialized_ = false;
     bool standup_goal_latched_;
     bool logged_first_joint_state_;
     bool logged_first_command_publish_;

@@ -6,6 +6,7 @@ rl_controller_node:
     standup_duration: 3.0      # seconds to interpolate to default pose
     sit_duration: 3.0          # seconds to interpolate to sit pose
     action_scale: 0.25
+    joint_command_lpf_cutoff_hz: 4.0
     zero_pendulum: false
     # Policy order: FL_hip, FR_hip, RL_hip, RR_hip,
     #               FL_thigh, FR_thigh, RL_thigh, RR_thigh,
